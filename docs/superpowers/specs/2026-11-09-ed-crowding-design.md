@@ -1,7 +1,7 @@
 # ED Crowding Command Center — Design Spec
 
 - **Date:** 2026-11-09
-- **Status:** Revised (classic streaming cluster, static PHI de-identification with no UC masks, app calls Genie, Lakebase Autoscaling), awaiting review
+- **Status:** Revised after workspace verification, awaiting review
 - **Author:** Jagjit Natt (with Claude)
 - **Audience:** Databricks FE handover to customer (healthcare provider network)
 
@@ -61,7 +61,12 @@ Choices made during design:
 
 ## 3. Unity Catalog layout
 
-Catalog: bundle variable `catalog` (default `ed_ops`).
+- **Catalog:** bundle variable `catalog`.
+  - **dev default is `hls_jagjit_lb_playground_catalog`** (existing). Verified on the dev workspace: the deployer has **no `CREATE CATALOG`** on the shared metastore.
+  - The `customer` target defaults to `ed_ops`. When `create_catalog = true`, `ed_setup` creates it; otherwise it must already exist.
+- **Schemas:** physical name is `{schema_prefix}{logical}`, with bundle variable `schema_prefix` (default `ed_`), so the solution can sit inside a shared catalog.
+  - This spec uses **logical** names throughout: `silver.ed_visits` means `<catalog>.ed_silver.ed_visits`.
+  - The validation run uses prefix `ed_validate_` in the same catalog.
 
 | Schema | Contents |
 |---|---|
@@ -70,6 +75,7 @@ Catalog: bundle variable `catalog` (default `ed_ops`).
 | `gold` | `facility_current`, `facility_snapshot_5min`, `ed_board_current`, `facility_narrative`, `network_narrative`; view `visit_facts` |
 | `ref` | `facility`, `physician_roster`; volume `checkpoints` |
 | `sim` | `visit_plan`, `generator_state` (generator internals, not for consumers) |
+| `serving` | Lakebase **synced tables** (§12). Each one is a UC object named after its gold/ref source, for example `serving.facility_current`. The sync pipelines' storage is in this schema too |
 
 All timestamps are stored as UTC `TIMESTAMP`. Local-time logic (diurnal curves, display) uses bundle variable `timezone` (default `America/Chicago`). Every facility is in that one timezone.
 
@@ -258,7 +264,7 @@ All run as tasks of the continuous `ed_streaming` job, each with its own checkpo
 | `silver_visits` | Stream from `bronze.ed_events` with `withWatermark('event_ts', '1 hour').dropDuplicatesWithinWatermark(['event_id'])`; `foreachBatch`: (1) validate and send failures to `silver.ed_events_quarantine` with a `reason_code`; (2) **de-identify** structured PHI on `ARRIVAL` events (§11.2) and drop the raw PHI fields and `chief_complaint_text`, so no raw PHI is written to silver; (3) pivot events to a per-visit partial row; (4) `MERGE` on `(facility_id, visit_id)`, setting each stage timestamp with `COALESCE(target, source)`. Out-of-order events fill in without overwriting, and replays or duplicates outside the watermark are harmless (idempotent) |
 | `silver_notes_ai` | Stream from `bronze.ed_events` filtered to `TRIAGE`; `foreachBatch` runs the AI chain (§9) and MERGEs into `silver.triage_notes` on `(facility_id, visit_id)`. It **never writes to `silver.ed_visits`**: each silver table has exactly one writer, which avoids concurrent-MERGE conflicts. Gold joins the two |
 | `ai_retry_sweep` | Separate task with a `rate` source and 15-minute trigger: re-runs the AI chain for `silver.triage_notes` rows with `ai_status = 'error'` and `ai_attempts < 3`. It writes only to `silver.triage_notes`; because it updates only error rows and `silver_notes_ai` only inserts new visits, the two don't conflict in practice under row-level concurrency |
-| `gold_metrics` | `rate` source, 1-minute trigger. `foreachBatch` reads the current state of `silver.ed_visits` left-joined to `silver.triage_notes` (in-ED visits plus departures within 24 h; 14-day hourly baselines cached and refreshed hourly), runs `compute_snapshots`, and MERGEs `facility_current`, `facility_snapshot_5min` (trailing 30 min) and `ed_board_current` (with `WHEN NOT MATCHED BY SOURCE THEN DELETE`) |
+| `gold_metrics` | `rate` source, 1-minute trigger. `foreachBatch` reads the current state of `silver.ed_visits` left-joined to `silver.triage_notes` (in-ED visits plus departures within 24 h; 14-day hourly baselines cached and refreshed hourly), runs `compute_snapshots`, and MERGEs `facility_current`, `facility_snapshot_5min` (trailing 30 min) and `ed_board_current`. **No deletes anywhere** (decided): the board is insert/update only. Visits that left the ED in this tick are updated to `in_ed = false` with `departed_ts` |
 | `gold_narratives` | `rate` source, 15-minute trigger. `ai_query` per facility over `facility_current` plus `top_drivers`, then one network-wide call. MERGEs both narrative tables |
 
 Every table has exactly one streaming writer. `ed_setup` writes before streaming starts.
@@ -274,8 +280,17 @@ Run in this order. Everything after step 1 runs on masked text only.
 1. `ai_mask(triage_note, array('person','phone number','date of birth','address','medical record number','email'))` produces `note_masked`. The same call is applied to `chief_complaint_text`, producing `chief_complaint_masked`. The `TRIAGE` event carries the chief complaint, so `silver_visits` never needs to call an LLM.
 2. **Deterministic post-check**: regex for phone, `MRN-\d+`, dates and emails over `note_masked` and `chief_complaint_masked`. Any match is replaced with `[REDACTED]` and sets `residual_phi_flag = true`. This gives a measured `ai_mask` miss rate.
 3. `ai_classify(note_masked, array('cardiac','respiratory','neurological','trauma','gastrointestinal','infectious','psychiatric','obstetric','musculoskeletal','other'))` produces `complaint_category`.
-4. `ai_extract(note_masked, array('heart_rate','blood_pressure','respiratory_rate','spo2','temperature','pain_score','symptom_onset'))` produces typed columns via `try_cast` (`bp_systolic`/`bp_diastolic` are parsed from `blood_pressure`).
-5. `ai_query(llm_endpoint, <ESI prompt>, responseFormat => {suggested_esi INT, rationale STRING}, failOnError => false)`. `undertriage_flag = (esi_level − suggested_esi) ≥ 2`. The UI labels this as demo decision-support, not clinical advice.
+4. `ai_extract(note_masked, array('heart_rate','blood_pressure','respiratory_rate','spo2','temperature','pain_score','symptom_onset'))` returns **strings that include units** (verified: `"89% RA"`, `"9/10"`, `"37.1C"`, `"92/58"`, `"40 min"`). Typed columns are produced with `regexp_extract` and then `try_cast`:
+   - `spo2` takes the leading number;
+   - `pain_score` takes the number before `/10`;
+   - `temperature_c` takes the number and converts °F when it is over 50;
+   - `bp_systolic` and `bp_diastolic` split on `/`;
+   - `symptom_onset` stays as text.
+5. `ai_query(llm_endpoint, <ESI prompt>, failOnError => false)` with **no `responseFormat`**.
+   - Verified: `responseFormat` is **rejected by Claude 5.x endpoints** (*"structured output … requires forced tool use, which newer Anthropic models reject"*). Claude 4.x accepts it but ignored the length limits.
+   - The prompt asks for **only** a JSON object `{"suggested_esi": <1-5>, "rationale": <≤30 words>}`. The result is parsed with `from_json(regexp_extract(result, '(\\{.*\\})', 1), 'suggested_esi INT, rationale STRING')`. This was verified clean on `databricks-claude-sonnet-5-5`.
+   - A null parse, or `suggested_esi` outside 1–5, sets `ai_status = 'parse_error'`, which the retry sweep handles. An `errorMessage` sets `ai_status = 'error'`.
+   - `undertriage_flag = (esi_level − suggested_esi) ≥ 2`. The UI labels this as demo decision-support, not clinical advice.
 
 `silver.triage_notes` stores **only** `note_masked`, `chief_complaint_masked` and the derived columns; the raw text exists only in bronze.
 
@@ -287,7 +302,7 @@ Run in this order. Everything after step 1 runs on masked text only.
 
 - **`facility_narrative`:**
   - The prompt includes the facility's current metrics and `top_drivers` JSON, with the instruction "use only these numbers; do not invent values".
-  - `responseFormat` is `{headline STRING, explanation STRING (≤60 words), recommended_actions ARRAY<STRING> (≤3)}`.
+  - Output contract (prompt-enforced JSON, parsed with `from_json`, same approach as §9.1 step 5): `{headline STRING, explanation STRING (≤60 words), recommended_actions ARRAY<STRING> (≤3)}`. If parsing fails, the previous narrative is kept.
   - The table stores `input_json`, `model`, `generated_at`.
 - **`network_narrative`:** one row. The input is all facilities' bands, gEDWIN, D2P median and top driver. The output covers which facilities are crowded and why, which are doing well, and network-level actions.
 
@@ -307,7 +322,7 @@ All tables are **managed Delta**, liquid-clustered on their **MERGE keys** (appe
 | `silver.ed_events_quarantine` | append | — | `(ingest_date, facility_id)` | no | no |
 | `gold.facility_current` | MERGE | `(facility_id)` | `(facility_id)` | yes | Continuous |
 | `gold.facility_snapshot_5min` | MERGE | `(facility_id, snapshot_ts)` | `(facility_id, snapshot_ts)` | yes | Continuous |
-| `gold.ed_board_current` | MERGE + delete | `(facility_id, visit_id)` | `(facility_id, visit_id)` | yes | Continuous |
+| `gold.ed_board_current` | MERGE (insert/update only) | `(facility_id, visit_id)` | `(facility_id, visit_id)` | yes | Continuous |
 | `gold.facility_narrative` | MERGE | `(facility_id)` | `(facility_id)` | yes | Continuous |
 | `gold.network_narrative` | MERGE | `(network_id)` (one row, `'NETWORK'`) | `(network_id)` | yes | Continuous |
 | `gold.visit_facts` | **view** (see below) | — | — | — | no |
@@ -330,7 +345,7 @@ All tables are **managed Delta**, liquid-clustered on their **MERGE keys** (appe
   - `top_drivers`, `dq_flags`.
 
   `facility_current` also has `facility_name`, `facility_type`, `region` (denormalised for the app).
-- **`gold.ed_board_current`:** `facility_id`, `visit_id`, `status` (`waiting`, `in_bed`, `boarding`), `esi_level`, `suggested_esi`, `undertriage_flag`, `complaint_category`, `minutes_in_ed`, `minutes_waiting`, `arrival_mode`, `on_vent`. No PHI.
+- **`gold.ed_board_current`:** `facility_id`, `visit_id`, `in_ed` (boolean; the app and Genie filter on `in_ed = true`), `departed_ts`, `status` (`waiting`, `in_bed`, `boarding`, `departed`), `esi_level`, `suggested_esi`, `undertriage_flag`, `complaint_category`, `minutes_in_ed`, `minutes_waiting`, `arrival_mode`, `on_vent`. No PHI.
 
 ---
 
@@ -382,7 +397,7 @@ Every table and column comment comes from `metadata/tables.yml`. Column comments
 
 ### 11.5 Automated checks (`governance/checks.py`, run in `ed_setup` and `ed_validate`)
 
-1. Every table and column in the catalog has a non-empty comment.
+1. Every table and column in the solution's schemas has a non-empty comment.
 2. Every table has `layer`, `domain`, `data_classification`, `contains_phi`, `data_origin`.
 3. No column tagged `phi_type` exists in `gold`, `ref`, any synced table, or any table in the Genie space.
 4. Every `phi_type`-tagged column outside `bronze` and `sim` also has a `deid_method` tag.
@@ -394,8 +409,12 @@ Every table and column comment comes from `metadata/tables.yml`. Column comments
 
 - **Lakebase Autoscaling** (decided).
   - The bundle declares a `postgres_projects` resource `ed-ops`, a `postgres_branches` resource per target (`dev`, or `production` for `customer`) and a `postgres_endpoints` read-write compute endpoint, with min/max capacity from `lakebase_min_cu` / `lakebase_max_cu` and scale-to-zero enabled.
-  - Postgres database: `ed_ops`.
+  - Postgres database `ed_ops`: created by `ed_setup` through the SDK (`postgres.create_database`, owned by the deployer's branch role), because bundles don't declare Postgres databases.
 - **Synced tables** per §10 are created by `serving/lakebase_sync.py` in `ed_setup` through the SDK (`w.postgres.create_synced_table`), because bundles don't declare autoscaling synced tables yet. The step is idempotent: it creates a table if missing and leaves matching specs alone.
+  - Verified: the synced table can live in a **standard UC catalog**; no registered Lakebase catalog (and so no `CREATE CATALOG`) is needed.
+  - UC name: `<catalog>.serving.<table>`. Postgres name: schema = the physical `serving` schema name, table = `<table>`. For example, Postgres `ed_serving.facility_current`.
+  - Spec: `branch`, `postgres_database = 'ed_ops'`, `source_table_full_name`, `primary_key_columns`, `scheduling_policy`, `create_database_objects_if_missing = true`, `new_pipeline_spec.storage_catalog/storage_schema = <catalog>/serving`.
+  - **Measured latency:** a MERGE (updates plus insert) on a liquid-clustered CDF source reached Postgres in **about 13 seconds** in Continuous mode.
   - Each synced table's primary key is the PK in §10.
   - Sync modes are bundle variables: `sync_mode_live` (default `CONTINUOUS`) and `sync_mode_ref` (default `SNAPSHOT`).
   - Continuous sync and the app's 30-second polling keep the compute awake during demos; scale-to-zero only saves cost when the solution is idle.
@@ -529,12 +548,12 @@ pytest + FastAPI `TestClient` with the fake `Repository`; vitest for band colour
 
 ### 16.3 `ed_validate` job (on the workspace)
 
-Runs at small scale (5 facilities, 1-day backfill, about 10 live ticks) in catalog `<catalog>_validate`. It asserts:
+Runs at small scale (5 facilities, 1-day backfill, about 10 live ticks) in the same catalog with `schema_prefix = ed_validate_`. Synced-table checks use a separate `validate` branch of the same Lakebase project, so the dev branch is never touched. It asserts:
 
 1. Rows flow bronze → silver → gold.
 2. Quarantine count is greater than 0 and matches the configured chaos.
 3. Governance checks in §11.5 pass, including the PHI content scan.
-4. A seeded **golden scenario** produces exactly the hand-calculated EDWIN, gEDWIN and NEDOCS. The scenario is a test-only facility `FAC000` in the validate catalog's `ref.facility` and `ref.physician_roster`, plus a fixed visit set loaded directly into `silver.ed_visits` and `silver.triage_notes`. It is never created in the main catalog.
+4. A seeded **golden scenario** produces exactly the hand-calculated EDWIN, gEDWIN and NEDOCS. The scenario is a test-only facility `FAC000` in the validate schemas' `ref.facility` and `ref.physician_roster`, plus a fixed visit set loaded directly into `silver.ed_visits` and `silver.triage_notes`. It is never created in the main schemas.
 5. Synced tables exist and have the same row counts as their sources.
 6. Optionally, the Genie benchmark pass rate.
 
@@ -559,7 +578,9 @@ Runs at small scale (5 facilities, 1-day backfill, about 10 live ticks) in catal
 
 | Variable | Default |
 |---|---|
-| `catalog` | `ed_ops` |
+| `catalog` | dev: `hls_jagjit_lb_playground_catalog`; customer: `ed_ops` |
+| `create_catalog` | dev: `false`; customer: `true` |
+| `schema_prefix` | `ed_` |
 | `facility_count` | 50 |
 | `backfill_days` | 14 |
 | `ai_backfill_days` | 2 |
@@ -577,7 +598,7 @@ Runs at small scale (5 facilities, 1-day backfill, about 10 live ticks) in catal
 
 ### Teardown
 
-`databricks bundle destroy` (removes jobs, app, Genie space and the Lakebase project) plus `scripts/teardown.sh` (deletes synced tables, then drops the catalog(s)).
+`databricks bundle destroy` (removes jobs, app, Genie space and the Lakebase project) plus `scripts/teardown.sh`. It deletes the synced tables, then drops the `{schema_prefix}*` schemas, and drops the catalog only when `create_catalog = true`.
 
 ---
 
@@ -619,20 +640,21 @@ README.md
 4. Flow metrics use 24 h windows; D2P uses 1 h.
 5. All facilities are in one timezone.
 
-**Resolved on the dev workspace (2026-11-09)**
+**Verified on the dev workspace (2026-11-09), with scratch resources created and deleted**
 
-- Streaming runs on a classic cluster (decided); DBR 18 LTS is available.
-- No ABAC and no UC column masks (decided): PHI is de-identified physically in the pipeline (§11.2).
-- `databricks-claude-sonnet-5-5` is ready.
-- The app must call Genie (decided).
-- Bundles support `genie_spaces`, `database_instances`, `synced_database_tables` and `postgres_*`; apps support `genie_space` and `postgres` resources.
-- Both Lakebase flavours exist on the workspace and support synced tables. **Autoscaling chosen** (decided).
+| # | Check | Result |
+|---|---|---|
+| 1 | Streaming compute | Classic cluster (decided). DBR 18 LTS (Spark 4.1.0) in standard access mode runs a `rate` source with a `processingTime` trigger and a `foreachBatch` MERGE ✅ |
+| 2 | AI functions on classic DBR 18 | `ai_mask`, `ai_classify` and `ai_extract` work ✅. `ai_extract` returns strings with units, so regex parsing is needed (§9.1) |
+| 3 | `ai_query` structured output | `responseFormat` is **rejected** by Claude 5.x. Use a JSON-only prompt and `from_json` (§9.1); verified on `databricks-claude-sonnet-5-5` ✅ |
+| 4 | Lakebase Autoscaling synced tables | Continuous sync from a liquid-clustered CDF Delta table, inserts and updates via MERGE, **about 13 s** to Postgres ✅. The synced table can sit in a standard UC catalog ✅. There are no deletes in the design (decided) |
+| 5 | App on-behalf-of-user | An app requesting `dashboards.genie` and `sql` got both as **effective** user scopes ✅ |
+| 6 | UC permissions | **No `CREATE CATALOG`** on the shared metastore. Use the existing catalog with `schema_prefix` (§3) |
+| 7 | PHI masking | No ABAC and no UC column masks (decided); PHI is de-identified physically (§11.2) |
+| 8 | Bundle resources | `genie_spaces`, `postgres_projects/branches/endpoints`; app resources `genie_space` and `postgres` ✅. Postgres databases and autoscaling synced tables are created by SDK in `ed_setup` |
+| 9 | Endpoint | `databricks-claude-sonnet-5-5` is ready ✅ |
 
-**Still to verify when building the dependent part**
-
-1. CDF-based Continuous sync from managed, liquid-clustered Delta tables, including deletes from `ed_board_current`.
-2. `ai_mask`, `ai_classify` and `ai_extract` run on DBR 18 classic compute (otherwise run the AI chain in `foreachBatch` through the SQL warehouse).
-3. On-behalf-of-user authorization is enabled for Databricks Apps on the workspace (the service-principal path works either way).
+**Minor, checked during implementation:** installing `dbldatagen` (PyPI) as a job library on the standard-access-mode cluster.
 
 ---
 

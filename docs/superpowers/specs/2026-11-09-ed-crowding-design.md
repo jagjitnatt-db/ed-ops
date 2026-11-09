@@ -62,8 +62,8 @@ Choices made during design:
 ## 3. Unity Catalog layout
 
 - **Catalog:** bundle variable `catalog`.
-  - **dev default is `hls_jagjit_lb_playground_catalog`** (existing). Verified on the dev workspace: the deployer has **no `CREATE CATALOG`** on the shared metastore.
-  - The `customer` target defaults to `ed_ops`. When `create_catalog = true`, `ed_setup` creates it; otherwise it must already exist.
+  - Default: **`hls_jagjit_lb_playground_catalog`** (existing).
+  - The solution **never creates or drops a catalog** (decided). It only creates schemas inside an existing catalog. A customer sets `catalog` to one of their own existing catalogs.
 - **Schemas:** physical name is `{schema_prefix}{logical}`, with bundle variable `schema_prefix` (default `ed_`), so the solution can sit inside a shared catalog.
   - This spec uses **logical** names throughout: `silver.ed_visits` means `<catalog>.ed_silver.ed_visits`.
   - The validation run uses prefix `ed_validate_` in the same catalog.
@@ -578,8 +578,7 @@ Runs at small scale (5 facilities, 1-day backfill, about 10 live ticks) in the s
 
 | Variable | Default |
 |---|---|
-| `catalog` | dev: `hls_jagjit_lb_playground_catalog`; customer: `ed_ops` |
-| `create_catalog` | dev: `false`; customer: `true` |
+| `catalog` | `hls_jagjit_lb_playground_catalog` (must already exist) |
 | `schema_prefix` | `ed_` |
 | `facility_count` | 50 |
 | `backfill_days` | 14 |
@@ -598,7 +597,7 @@ Runs at small scale (5 facilities, 1-day backfill, about 10 live ticks) in the s
 
 ### Teardown
 
-`databricks bundle destroy` (removes jobs, app, Genie space and the Lakebase project) plus `scripts/teardown.sh`. It deletes the synced tables, then drops the `{schema_prefix}*` schemas, and drops the catalog only when `create_catalog = true`.
+`databricks bundle destroy` (removes jobs, app, Genie space and the Lakebase project) plus `scripts/teardown.sh`. It deletes the synced tables, then drops only the `{schema_prefix}*` schemas. The catalog is never dropped.
 
 ---
 
@@ -649,7 +648,7 @@ README.md
 | 3 | `ai_query` structured output | `responseFormat` is **rejected** by Claude 5.x. Use a JSON-only prompt and `from_json` (§9.1); verified on `databricks-claude-sonnet-5-5` ✅ |
 | 4 | Lakebase Autoscaling synced tables | Continuous sync from a liquid-clustered CDF Delta table, inserts and updates via MERGE, **about 13 s** to Postgres ✅. The synced table can sit in a standard UC catalog ✅. There are no deletes in the design (decided) |
 | 5 | App on-behalf-of-user | An app requesting `dashboards.genie` and `sql` got both as **effective** user scopes ✅ |
-| 6 | UC permissions | **No `CREATE CATALOG`** on the shared metastore. Use the existing catalog with `schema_prefix` (§3) |
+| 6 | UC catalog | Use the existing `hls_jagjit_lb_playground_catalog` (decided); no catalog creation. Schemas are isolated by `schema_prefix` (§3) |
 | 7 | PHI masking | No ABAC and no UC column masks (decided); PHI is de-identified physically (§11.2) |
 | 8 | Bundle resources | `genie_spaces`, `postgres_projects/branches/endpoints`; app resources `genie_space` and `postgres` ✅. Postgres databases and autoscaling synced tables are created by SDK in `ed_setup` |
 | 9 | Endpoint | `databricks-claude-sonnet-5-5` is ready ✅ |

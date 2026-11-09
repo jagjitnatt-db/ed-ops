@@ -1,0 +1,312 @@
+# Single source of truth for every schema, volume, table, column, comment, PK, clustering key and tag.
+# DDL is generated from this file (ed_ops.ddl.generate). Never hand-edit tables in the workspace.
+defaults:
+  table_tags:
+    domain: emergency_department
+    data_origin: synthetic
+
+schemas:
+  bronze: "Raw landing events from the ED patient-journey simulator. Contains raw PHI; restricted access."
+  silver: "Validated, de-identified ED visit state and enriched triage notes."
+  gold: "Point-in-time ED crowding metrics (EDWIN, gEDWIN, NEDOCS, door-to-provider) and the live ED board."
+  ref: "Reference data (facilities, physician roster) and stream checkpoints."
+  sim: "Simulator internals (visit plans, patient population, generator state). Contains raw PHI; not for consumers."
+  serving: "Lakebase synced tables that serve the Databricks App (populated in Plan 3)."
+
+volumes:
+  - schema: bronze
+    name: landing
+    comment: "Landing zone for simulator JSON event files, partitioned by UTC yyyy/mm/dd/hh."
+  - schema: ref
+    name: checkpoints
+    comment: "Structured Streaming checkpoints, one versioned folder per stream."
+
+tables:
+  - schema: bronze
+    name: ed_events
+    comment: "Raw ED events ingested by Auto Loader from the landing volume. Append-only; may contain duplicates, late and malformed events by design."
+    cluster_by: [facility_id, event_ts]
+    tags: {data_classification: phi, contains_phi: "true"}
+    columns:
+      - {name: event_id, type: STRING, comment: "Deterministic UUIDv5 of visit_id and event_type; identical for duplicate re-emissions."}
+      - {name: event_type, type: STRING, comment: "ARRIVAL, TRIAGE, BED_ASSIGNED, PROVIDER_GREET, VENT_START, VENT_END, DISPOSITION, LWBS or DEPARTURE."}
+      - {name: event_ts, type: TIMESTAMP, comment: "When the event happened (UTC)."}
+      - {name: emitted_ts, type: TIMESTAMP, comment: "When the simulator wrote the event (UTC); later than event_ts for late events."}
+      - {name: facility_id, type: STRING, comment: "Facility identifier (FACnnn); unknown or null for some malformed test events."}
+      - {name: visit_id, type: STRING, comment: "Visit identifier {facility_id}-{arrival yyyyMMddHHmm}-{seq}; null for some malformed test events."}
+      - name: payload
+        type: "STRUCT<arrival_mode: STRING, patient_name: STRING, mrn: STRING, dob: DATE, sex: STRING, phone: STRING, address: STRUCT<street: STRING, city: STRING, state: STRING, zip: STRING>, chief_complaint_text: STRING, esi_level: INT, triage_note: STRING, bed_id: STRING, provider_id: STRING, disposition: STRING>"
+        comment: "Event-type-specific attributes. Contains raw PHI: name, MRN, DOB, phone, address and free-text triage notes and chief complaints."
+        tags: {data_classification: phi, phi_type: free_text}
+      - {name: _rescued_data, type: STRING, comment: "JSON of fields that did not match the expected schema (Auto Loader rescued data); non-null rows are quarantined in silver."}
+      - {name: _source_file, type: STRING, comment: "Landing file the event was read from."}
+      - {name: _ingest_ts, type: TIMESTAMP, comment: "When Auto Loader ingested the event (UTC)."}
+      - {name: ingest_date, type: DATE, comment: "UTC date of _ingest_ts."}
+
+  - schema: silver
+    name: ed_visits
+    comment: "One row per ED visit with the latest known timestamp of each journey stage, built by MERGE from bronze events. Structured PHI is de-identified before write."
+    primary_key: [facility_id, visit_id]
+    cluster_by: [facility_id, visit_id]
+    cdf: true
+    tags: {data_classification: confidential, contains_phi: "false"}
+    columns:
+      - {name: facility_id, type: STRING, nullable: false, comment: "Facility identifier (FACnnn); joins to ref.facility."}
+      - {name: visit_id, type: STRING, nullable: false, comment: "Visit identifier {facility_id}-{arrival yyyyMMddHHmm}-{seq}."}
+      - {name: arrival_ts, type: TIMESTAMP, comment: "Arrival (door) time, UTC."}
+      - {name: arrival_mode, type: STRING, comment: "walk_in or ambulance."}
+      - {name: esi_level, type: INT, comment: "Nurse-assigned Emergency Severity Index 1 (most acute) to 5."}
+      - {name: triage_ts, type: TIMESTAMP, comment: "Triage completion time, UTC."}
+      - {name: bed_assigned_ts, type: TIMESTAMP, comment: "Treatment bed assignment time, UTC."}
+      - {name: greet_ts, type: TIMESTAMP, comment: "Provider greet time, UTC; door-to-provider = greet_ts - arrival_ts."}
+      - {name: vent_start_ts, type: TIMESTAMP, comment: "Mechanical ventilation start time, UTC."}
+      - {name: vent_end_ts, type: TIMESTAMP, comment: "Mechanical ventilation end time, UTC."}
+      - {name: disposition, type: STRING, comment: "DISCHARGE, ADMIT or TRANSFER."}
+      - {name: disposition_ts, type: TIMESTAMP, comment: "Disposition decision time, UTC; for ADMIT this is the admit decision that starts boarding."}
+      - {name: lwbs_ts, type: TIMESTAMP, comment: "Time the patient left without being seen, UTC."}
+      - {name: departure_ts, type: TIMESTAMP, comment: "Time the patient left the ED, UTC: the DEPARTURE event, or lwbs_ts for patients who left without being seen."}
+      - {name: patient_name_redacted, type: STRING, comment: "Constant 'REDACTED' when a name was recorded; the raw name exists only in bronze.", tags: {data_classification: confidential, phi_type: name, deid_method: redacted}}
+      - {name: mrn_hash, type: STRING, comment: "SHA-256 of MRN plus a secret salt; join and count patients without seeing the MRN.", tags: {data_classification: confidential, phi_type: mrn, deid_method: hashed}}
+      - {name: birth_year, type: INT, comment: "Year of birth (date of birth generalised to year).", tags: {data_classification: confidential, phi_type: dob, deid_method: generalized}}
+      - {name: age_at_arrival, type: INT, comment: "Age in whole years at arrival_ts.", tags: {data_classification: confidential, phi_type: dob, deid_method: generalized}}
+      - {name: sex, type: STRING, comment: "Recorded sex: F or M."}
+      - {name: phone_last4, type: STRING, comment: "Last four digits of the contact phone number.", tags: {data_classification: confidential, phi_type: contact, deid_method: generalized}}
+      - {name: city, type: STRING, comment: "City of residence (street and ZIP removed).", tags: {data_classification: confidential, phi_type: address, deid_method: generalized}}
+      - {name: state, type: STRING, comment: "State of residence.", tags: {data_classification: confidential, phi_type: address, deid_method: generalized}}
+      - {name: last_event_ts, type: TIMESTAMP, comment: "Latest event_ts merged into this visit, UTC."}
+      - {name: updated_at, type: TIMESTAMP, comment: "When the row was last merged, UTC."}
+
+  - schema: silver
+    name: ed_events_quarantine
+    comment: "Events rejected by silver validation, with a reason code. Holds envelope fields only (no PHI)."
+    cluster_by: [ingest_date, facility_id]
+    tags: {data_classification: internal, contains_phi: "false"}
+    columns:
+      - {name: event_id, type: STRING, comment: "event_id of the rejected event."}
+      - {name: event_type, type: STRING, comment: "event_type of the rejected event (may be invalid)."}
+      - {name: event_ts, type: TIMESTAMP, comment: "event_ts of the rejected event, UTC."}
+      - {name: emitted_ts, type: TIMESTAMP, comment: "emitted_ts of the rejected event, UTC."}
+      - {name: facility_id, type: STRING, comment: "facility_id of the rejected event (may be unknown or null)."}
+      - {name: visit_id, type: STRING, comment: "visit_id of the rejected event (may be null)."}
+      - {name: reason_code, type: STRING, comment: "unparseable, missing_event_ts, missing_facility_id, missing_visit_id, invalid_event_type, invalid_esi or unknown_facility."}
+      - {name: esi_level, type: INT, comment: "payload.esi_level of the rejected event, kept to diagnose invalid_esi."}
+      - {name: source_file, type: STRING, comment: "Landing file of the rejected event."}
+      - {name: quarantined_at, type: TIMESTAMP, comment: "When the event was quarantined, UTC."}
+      - {name: ingest_date, type: DATE, comment: "Bronze ingest date of the rejected event."}
+
+  - schema: silver
+    name: triage_notes
+    comment: "Triage notes and chief complaints masked with ai_mask plus a regex post-check, with AI-derived category, vitals and suggested ESI. Populated by Plan 2."
+    primary_key: [facility_id, visit_id]
+    cluster_by: [facility_id, visit_id]
+    tags: {data_classification: confidential, contains_phi: "false"}
+    columns:
+      - {name: facility_id, type: STRING, nullable: false, comment: "Facility identifier (FACnnn)."}
+      - {name: visit_id, type: STRING, nullable: false, comment: "Visit identifier; joins to silver.ed_visits."}
+      - {name: triage_ts, type: TIMESTAMP, comment: "Triage time of the note, UTC."}
+      - {name: esi_level, type: INT, comment: "Nurse-assigned ESI recorded with the note."}
+      - {name: note_masked, type: STRING, comment: "Triage note with PHI masked by ai_mask and a deterministic regex pass.", tags: {data_classification: confidential, phi_type: free_text, deid_method: ai_mask}}
+      - {name: chief_complaint_masked, type: STRING, comment: "Chief complaint with PHI masked by ai_mask and a deterministic regex pass.", tags: {data_classification: confidential, phi_type: free_text, deid_method: ai_mask}}
+      - {name: residual_phi_flag, type: BOOLEAN, comment: "True when the regex post-check found and redacted PHI that ai_mask missed."}
+      - {name: complaint_category, type: STRING, comment: "ai_classify category: cardiac, respiratory, neurological, trauma, gastrointestinal, infectious, psychiatric, obstetric, musculoskeletal or other."}
+      - {name: heart_rate, type: INT, comment: "Heart rate (beats/min) extracted by ai_extract."}
+      - {name: bp_systolic, type: INT, comment: "Systolic blood pressure (mmHg) extracted by ai_extract."}
+      - {name: bp_diastolic, type: INT, comment: "Diastolic blood pressure (mmHg) extracted by ai_extract."}
+      - {name: respiratory_rate, type: INT, comment: "Respiratory rate (breaths/min) extracted by ai_extract."}
+      - {name: spo2, type: INT, comment: "Oxygen saturation (%) extracted by ai_extract."}
+      - {name: temperature_c, type: DOUBLE, comment: "Temperature in Celsius extracted by ai_extract (Fahrenheit converted)."}
+      - {name: pain_score, type: INT, comment: "Pain score 0-10 extracted by ai_extract."}
+      - {name: symptom_onset, type: STRING, comment: "Symptom onset as free text extracted by ai_extract."}
+      - {name: suggested_esi, type: INT, comment: "ESI 1-5 suggested by ai_query from the masked note (demo decision support, not clinical advice)."}
+      - {name: esi_rationale, type: STRING, comment: "Short ai_query rationale for suggested_esi."}
+      - {name: undertriage_flag, type: BOOLEAN, comment: "True when esi_level - suggested_esi >= 2."}
+      - {name: ai_enriched, type: BOOLEAN, comment: "True when the AI chain ran; false for backfill notes older than ai_backfill_days."}
+      - {name: ai_status, type: STRING, comment: "ok, error or parse_error."}
+      - {name: ai_error, type: STRING, comment: "Last AI error message, if any."}
+      - {name: ai_attempts, type: INT, comment: "Number of AI chain attempts."}
+      - {name: processed_at, type: TIMESTAMP, comment: "When the row was last written, UTC."}
+
+  - schema: gold
+    name: facility_snapshot_5min
+    comment: "ED crowding metrics per facility every 5 minutes (UTC), recomputed for the trailing 30 minutes each tick so late events self-correct. History for trends and Genie."
+    primary_key: [facility_id, snapshot_ts]
+    cluster_by: [facility_id, snapshot_ts]
+    cdf: true
+    tags: {data_classification: internal, contains_phi: "false"}
+    columns:
+      - {name: facility_id, type: STRING, nullable: false, comment: "Facility identifier (FACnnn); joins to ref.facility."}
+      - {name: snapshot_ts, type: TIMESTAMP, nullable: false, comment: "Point in time (UTC) the metrics describe."}
+      - {name: census, type: INT, comment: "Patients in the ED at snapshot_ts (arrived and not yet departed or left without being seen), including the waiting room; the paper's B_A."}
+      - {name: n_esi1, type: INT, comment: "Census patients triaged ESI 1 at snapshot_ts."}
+      - {name: n_esi2, type: INT, comment: "Census patients triaged ESI 2 at snapshot_ts."}
+      - {name: n_esi3, type: INT, comment: "Census patients triaged ESI 3 at snapshot_ts."}
+      - {name: n_esi4, type: INT, comment: "Census patients triaged ESI 4 at snapshot_ts."}
+      - {name: n_esi5, type: INT, comment: "Census patients triaged ESI 5 at snapshot_ts."}
+      - {name: n_untriaged, type: INT, comment: "Census patients not yet triaged at snapshot_ts (weighted as ESI 3 in acuity)."}
+      - {name: waiting_now_n, type: INT, comment: "Census patients not yet greeted by a provider."}
+      - {name: in_bed_n, type: INT, comment: "Census patients assigned a treatment bed."}
+      - {name: longest_current_wait_min, type: DOUBLE, comment: "Minutes since arrival of the longest-waiting census patient not yet greeted by a provider."}
+      - {name: d2p_mean_min, type: DOUBLE, comment: "Door-to-provider mean, minutes, over patients greeted in the 60 minutes ending snapshot_ts. Null when d2p_sample_n = 0."}
+      - {name: d2p_median_min, type: DOUBLE, comment: "Door-to-provider median (exact percentile), minutes, over patients greeted in the 60 minutes ending snapshot_ts."}
+      - {name: d2p_p90_min, type: DOUBLE, comment: "Door-to-provider 90th percentile (exact), minutes, over patients greeted in the 60 minutes ending snapshot_ts."}
+      - {name: d2p_sample_n, type: INT, comment: "Patients greeted in the 60 minutes ending snapshot_ts; door-to-provider statistics are low-sample below 5."}
+      - {name: occupancy_ratio, type: DOUBLE, comment: "census / ed_beds (OR); may exceed 1 when patients outnumber treatment spaces."}
+      - {name: acuity_ratio, type: DOUBLE, comment: "Mean triage weight of census patients, sum(n_i * t_i) / census with t_i = 6 - ESI and untriaged = 3 (AR). Null when census = 0."}
+      - {name: attendings_on_duty, type: INT, comment: "Attending physicians on duty at snapshot_ts from ref.physician_roster (N_a)."}
+      - {name: edwin, type: DOUBLE, comment: "EDWIN = (1/N_a) * OR_c/(1-OR_c) * AR with OR_c = occupancy clamped to [0.01, 0.99] (gEDWIN paper eq. 6). 0 when census = 0; null when no attending is on duty."}
+      - {name: edwin_band, type: STRING, comment: "EDWIN band: Active (< 1.5), Busy (1.5 to 2), Crowded (> 2)."}
+      - {name: gedwin, type: DOUBLE, comment: "gEDWIN = ln(OR_c/(1-OR_c)) + ln(AR); natural log assumed (the paper does not state the base). Null when census = 0."}
+      - {name: gedwin_band, type: STRING, comment: "Headline crowding status from gEDWIN: Active (< 2.06), Busy (2.06 to 2.34), Crowded (> 2.34). Active when census = 0."}
+      - {name: gedwin_delta_1h, type: DOUBLE, comment: "gEDWIN at snapshot_ts minus gEDWIN one hour earlier; positive means deteriorating."}
+      - {name: boarders_n, type: INT, comment: "Census patients with an ADMIT disposition still in the ED (boarders)."}
+      - {name: vents_n, type: INT, comment: "Census patients on a ventilator at snapshot_ts."}
+      - {name: longest_boarder_h, type: DOUBLE, comment: "Hours since admit decision of the longest-waiting boarder; null when there are no boarders."}
+      - {name: last_bedded_wait_h, type: DOUBLE, comment: "Door-to-bed hours of the most recent patient assigned a bed in the 24 hours ending snapshot_ts."}
+      - {name: nedocs, type: DOUBLE, comment: "NEDOCS = -20 + 85.8*(census/ed_beds) + 600*(boarders/inpatient_beds) + 13.4*vents + 0.93*longest_boarder_h + 5.64*last_bedded_wait_h, clamped to 0-200."}
+      - {name: nedocs_level, type: INT, comment: "NEDOCS level: 1 not busy (<= 20), 2 busy (<= 60), 3 extremely busy (<= 100), 4 overcrowded (<= 140), 5 severely overcrowded (<= 180), 6 dangerously overcrowded."}
+      - {name: lwbs_rate_24h, type: DOUBLE, comment: "Share of departures in the 24 hours ending snapshot_ts that left without being seen."}
+      - {name: los_median_h_24h, type: DOUBLE, comment: "Median length of stay, hours, of discharged patients who departed in the 24 hours ending snapshot_ts."}
+      - {name: los_p90_h_24h, type: DOUBLE, comment: "90th percentile length of stay, hours, of discharged patients who departed in the 24 hours ending snapshot_ts."}
+      - {name: boarding_median_h_24h, type: DOUBLE, comment: "Median hours from admit decision to departure for admitted patients who departed in the 24 hours ending snapshot_ts."}
+      - {name: admit_rate_24h, type: DOUBLE, comment: "Share of dispositions in the 24 hours ending snapshot_ts that were admissions."}
+      - {name: arrivals_1h, type: INT, comment: "Arrivals in the 60 minutes ending snapshot_ts."}
+      - {name: ambulance_arrivals_1h, type: INT, comment: "Ambulance arrivals in the 60 minutes ending snapshot_ts."}
+      - {name: arrival_surge_ratio, type: DOUBLE, comment: "arrivals_1h divided by the facility's mean arrivals_1h for the same local hour over the baseline history."}
+      - {name: patients_per_attending, type: DOUBLE, comment: "census / attendings_on_duty."}
+      - {name: boarder_share, type: DOUBLE, comment: "boarders_n / census."}
+      - {name: high_acuity_share, type: DOUBLE, comment: "(n_esi1 + n_esi2) / census."}
+      - {name: undertriage_flags_n, type: INT, comment: "Census patients whose AI-suggested ESI is at least 2 levels more acute than the nurse ESI (0 until AI enrichment runs)."}
+      - {name: top_drivers, type: "ARRAY<STRUCT<driver: STRING, value: DOUBLE, baseline: DOUBLE, z: DOUBLE>>", comment: "Up to 3 crowding drivers deviating most (|z| >= 1) from the facility's baseline for the same local hour, most extreme first. Drivers: occupancy_ratio, boarder_share, patients_per_attending, arrivals_1h, high_acuity_share."}
+      - {name: dq_flags, type: "ARRAY<STRING>", comment: "Data-quality flags: no_attending_on_duty, census_exceeds_beds."}
+      - {name: computed_at, type: TIMESTAMP, comment: "When the row was computed, UTC."}
+
+  - schema: gold
+    name: facility_current
+    comment: "Latest crowding metrics, one row per facility, refreshed every minute by the gold ticker. Headline table for the app and Genie."
+    inherit_columns: {schema: gold, name: facility_snapshot_5min}
+    primary_key: [facility_id]
+    cluster_by: [facility_id]
+    cdf: true
+    tags: {data_classification: internal, contains_phi: "false"}
+    columns:
+      - {name: facility_name, type: STRING, comment: "Facility display name."}
+      - {name: facility_type, type: STRING, comment: "level_1_trauma, community, rural_critical_access or pediatric."}
+      - {name: region, type: STRING, comment: "Health-system region of the facility."}
+
+  - schema: gold
+    name: ed_board_current
+    comment: "De-identified live ED board: patients currently in the ED plus those who departed in the last 30 minutes. Insert/update only; filter in_ed = true for the current board."
+    primary_key: [facility_id, visit_id]
+    cluster_by: [facility_id, visit_id]
+    cdf: true
+    tags: {data_classification: internal, contains_phi: "false"}
+    columns:
+      - {name: facility_id, type: STRING, nullable: false, comment: "Facility identifier (FACnnn)."}
+      - {name: visit_id, type: STRING, nullable: false, comment: "Visit identifier."}
+      - {name: in_ed, type: BOOLEAN, comment: "True while the patient is in the ED as of as_of_ts."}
+      - {name: status, type: STRING, comment: "waiting (not yet greeted by a provider), in_bed (greeted or in a treatment bed), boarding (admitted, awaiting an inpatient bed) or departed."}
+      - {name: esi_level, type: INT, comment: "Nurse ESI if triaged by as_of_ts."}
+      - {name: suggested_esi, type: INT, comment: "AI-suggested ESI (Plan 2)."}
+      - {name: undertriage_flag, type: BOOLEAN, comment: "AI under-triage flag (Plan 2)."}
+      - {name: complaint_category, type: STRING, comment: "AI complaint category (Plan 2)."}
+      - {name: arrival_ts, type: TIMESTAMP, comment: "Arrival time, UTC."}
+      - {name: departed_ts, type: TIMESTAMP, comment: "Departure time when status is departed, UTC."}
+      - {name: minutes_in_ed, type: INT, comment: "Minutes from arrival to as_of_ts (or to departure once departed)."}
+      - {name: minutes_waiting, type: INT, comment: "Minutes from arrival to provider greet (or to as_of_ts/departure if never greeted)."}
+      - {name: arrival_mode, type: STRING, comment: "walk_in or ambulance."}
+      - {name: on_vent, type: BOOLEAN, comment: "True when on a ventilator at as_of_ts."}
+      - {name: as_of_ts, type: TIMESTAMP, comment: "Gold tick time the row describes, UTC."}
+      - {name: computed_at, type: TIMESTAMP, comment: "When the row was computed, UTC."}
+
+  - schema: ref
+    name: facility
+    comment: "The 50 simulated emergency departments with capacity and scenario profile."
+    primary_key: [facility_id]
+    cluster_by: [facility_id]
+    cdf: true
+    tags: {data_classification: internal, contains_phi: "false"}
+    columns:
+      - {name: facility_id, type: STRING, nullable: false, comment: "Facility identifier FAC001-FAC050."}
+      - {name: facility_name, type: STRING, comment: "Synthetic facility display name."}
+      - {name: region, type: STRING, comment: "Health-system region (Central, Metro, North, South, West)."}
+      - {name: city, type: STRING, comment: "City of the facility."}
+      - {name: state, type: STRING, comment: "US state of the facility."}
+      - {name: latitude, type: DOUBLE, comment: "Latitude (WGS84)."}
+      - {name: longitude, type: DOUBLE, comment: "Longitude (WGS84)."}
+      - {name: facility_type, type: STRING, comment: "level_1_trauma, community, rural_critical_access or pediatric."}
+      - {name: ed_beds, type: INT, comment: "ED treatment spaces (B_T)."}
+      - {name: inpatient_beds, type: INT, comment: "Hospital inpatient beds (NEDOCS denominator)."}
+      - {name: baseline_daily_visits, type: INT, comment: "Expected ED visits per day before time-of-day, day-of-week and scenario factors."}
+      - {name: scenario_profile, type: STRING, comment: "normal, chronic_boarding, understaffed, surge_prone or high_performer."}
+
+  - schema: ref
+    name: physician_roster
+    comment: "Attending physicians on duty per facility per 8-hour shift (07-15, 15-23, 23-07 local time)."
+    primary_key: [facility_id, shift_start]
+    cluster_by: [facility_id, shift_start]
+    tags: {data_classification: internal, contains_phi: "false"}
+    columns:
+      - {name: facility_id, type: STRING, nullable: false, comment: "Facility identifier (FACnnn)."}
+      - {name: shift_start, type: TIMESTAMP, nullable: false, comment: "Shift start, UTC."}
+      - {name: shift_end, type: TIMESTAMP, comment: "Shift end (exclusive), UTC."}
+      - {name: shift_name, type: STRING, comment: "day, evening or night."}
+      - {name: attendings_on_duty, type: INT, comment: "Attending physicians on duty for the shift (N_a)."}
+
+  - schema: sim
+    name: visit_plan
+    comment: "Simulator plan: every visit's full future journey decided at arrival. Events are emitted from it as their time passes. Contains raw PHI in free text."
+    primary_key: [facility_id, visit_id]
+    cluster_by: [facility_id, visit_id]
+    tags: {data_classification: phi, contains_phi: "true"}
+    columns:
+      - {name: facility_id, type: STRING, nullable: false, comment: "Facility identifier."}
+      - {name: visit_id, type: STRING, nullable: false, comment: "Visit identifier."}
+      - {name: pool_id, type: BIGINT, comment: "Patient from sim.patient_pool."}
+      - {name: arrival_ts, type: TIMESTAMP, comment: "Planned arrival, UTC."}
+      - {name: arrival_mode, type: STRING, comment: "walk_in or ambulance."}
+      - {name: true_esi, type: INT, comment: "True acuity used for disposition and note text."}
+      - {name: nurse_esi, type: INT, comment: "ESI the nurse assigns (differs from true_esi for deliberate under-triage cases)."}
+      - {name: archetype, type: STRING, comment: "Complaint archetype used to pick the note template."}
+      - {name: triage_ts, type: TIMESTAMP, comment: "Planned triage time, UTC."}
+      - {name: bed_assigned_ts, type: TIMESTAMP, comment: "Planned bed time, UTC."}
+      - {name: greet_ts, type: TIMESTAMP, comment: "Planned provider greet, UTC."}
+      - {name: vent_start_ts, type: TIMESTAMP, comment: "Planned ventilation start, UTC."}
+      - {name: vent_end_ts, type: TIMESTAMP, comment: "Planned ventilation end, UTC."}
+      - {name: disposition, type: STRING, comment: "Planned disposition."}
+      - {name: disposition_ts, type: TIMESTAMP, comment: "Planned disposition time, UTC."}
+      - {name: lwbs_ts, type: TIMESTAMP, comment: "Planned left-without-being-seen time, UTC."}
+      - {name: departure_ts, type: TIMESTAMP, comment: "Planned departure (equals lwbs_ts for LWBS), UTC."}
+      - {name: triage_note, type: STRING, comment: "Raw triage note with PHI.", tags: {data_classification: phi, phi_type: free_text}}
+      - {name: chief_complaint_text, type: STRING, comment: "Raw chief complaint, may contain PHI.", tags: {data_classification: phi, phi_type: free_text}}
+      - {name: planned_at, type: TIMESTAMP, comment: "Simulated time the visit was planned (window end), UTC."}
+
+  - schema: sim
+    name: patient_pool
+    comment: "Synthetic patient population generated by dbldatagen; arrivals sample patients from it. Raw synthetic PHI."
+    primary_key: [pool_id]
+    cluster_by: [pool_id]
+    tags: {data_classification: phi, contains_phi: "true"}
+    columns:
+      - {name: pool_id, type: BIGINT, nullable: false, comment: "Patient index 0..N-1."}
+      - {name: first_name, type: STRING, comment: "Synthetic first name.", tags: {data_classification: phi, phi_type: name}}
+      - {name: last_name, type: STRING, comment: "Synthetic last name.", tags: {data_classification: phi, phi_type: name}}
+      - {name: dob, type: DATE, comment: "Synthetic date of birth.", tags: {data_classification: phi, phi_type: dob}}
+      - {name: sex, type: STRING, comment: "F or M."}
+      - {name: phone, type: STRING, comment: "Synthetic phone number.", tags: {data_classification: phi, phi_type: contact}}
+      - {name: street, type: STRING, comment: "Synthetic street address.", tags: {data_classification: phi, phi_type: address}}
+      - {name: zip, type: STRING, comment: "Synthetic ZIP code.", tags: {data_classification: phi, phi_type: address}}
+      - {name: mrn, type: STRING, comment: "Synthetic medical record number MRN-nnnnnnn.", tags: {data_classification: phi, phi_type: mrn}}
+
+  - schema: sim
+    name: generator_state
+    comment: "Simulator progress watermarks; one row per generator."
+    primary_key: [generator_id]
+    cluster_by: [generator_id]
+    tags: {data_classification: internal, contains_phi: "false"}
+    columns:
+      - {name: generator_id, type: STRING, nullable: false, comment: "Generator identifier (main)."}
+      - {name: backfill_start_ts, type: TIMESTAMP, comment: "Start of the simulated history, UTC."}
+      - {name: last_planned_ts, type: TIMESTAMP, comment: "Arrivals are planned up to (excluding) this time, UTC."}
+      - {name: last_emitted_ts, type: TIMESTAMP, comment: "Events are emitted up to (including) this time, UTC."}
+      - {name: live_started_ts, type: TIMESTAMP, comment: "First live (streaming) tick, UTC; anchors the live surge scenario."}
+      - {name: updated_at, type: TIMESTAMP, comment: "When the state was last saved, UTC."}

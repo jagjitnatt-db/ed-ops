@@ -1,7 +1,7 @@
 # ED Crowding Command Center — Design Spec
 
 - **Date:** 2026-11-09
-- **Status:** Revised (classic streaming cluster, no ABAC, app calls Genie, Lakebase Autoscaling), awaiting review
+- **Status:** Revised (classic streaming cluster, static PHI de-identification with no UC masks, app calls Genie, Lakebase Autoscaling), awaiting review
 - **Author:** Jagjit Natt (with Claude)
 - **Audience:** Databricks FE handover to customer (healthcare provider network)
 
@@ -20,7 +20,7 @@ A Databricks reference solution that simulates real-time patient flow across **5
    - flow metrics (LWBS, length of stay (LOS), boarding, staffing);
    - an AI-generated explanation grounded in computed drivers.
 3. Crowding emerges from simulated patient journeys, so waits rise with occupancy. It is not painted on.
-4. No PHI reaches gold, Lakebase, the app or Genie. Structured PHI in silver is masked by tag-driven policies. Free-text PHI is masked with `ai_mask` plus a deterministic regex pass.
+4. Raw PHI exists only in `bronze` and `sim`, protected by grants. Silver and everything downstream hold **physically de-identified** data. Structured PHI fields are redacted deterministically. Free text (triage notes, chief complaints) is masked with `ai_mask` plus a deterministic regex pass. **No Unity Catalog column masks or ABAC are used.**
 5. Every table and column has a comment and the required governed tags, verified by an automated check.
 6. Genie answers the benchmark question set about current and historical crowding.
 7. A customer can deploy with a handful of bundle commands and tear everything down cleanly.
@@ -109,7 +109,7 @@ Events are JSON lines written to `/Volumes/<cat>/bronze/landing/events/yyyy/mm/d
 
 | `event_type` | Payload | Notes |
 |---|---|---|
-| `ARRIVAL` | `arrival_mode` (`walk_in`/`ambulance`), `patient_name`, `mrn`, `dob`, `sex`, `phone`, `address`, `chief_complaint_text` | Contains structured PHI |
+| `ARRIVAL` | `arrival_mode` (`walk_in`/`ambulance`), `patient_name`, `mrn`, `dob`, `sex`, `phone`, `address` (struct: `street`, `city`, `state`, `zip`), `chief_complaint_text` | Contains raw PHI; de-identified in `silver_visits` (§11.2) |
 | `TRIAGE` | `esi_level` (1–5), `triage_note` (free text with embedded PHI and vitals), `chief_complaint_text` | |
 | `BED_ASSIGNED` | `bed_id` | |
 | `PROVIDER_GREET` | `provider_id` | D2P = greet − arrival |
@@ -255,7 +255,7 @@ All run as tasks of the continuous `ed_streaming` job, each with its own checkpo
 |---|---|
 | `generator` | §6 |
 | `bronze_ingest` | Auto Loader (`cloudFiles`, JSON) with an explicit schema and `_rescued_data`. Appends to `bronze.ed_events` with `_ingest_ts`, `_source_file`, `ingest_date` |
-| `silver_visits` | Stream from `bronze.ed_events` with `withWatermark('event_ts', '1 hour').dropDuplicatesWithinWatermark(['event_id'])`; `foreachBatch`: (1) validate and send failures to `silver.ed_events_quarantine` with a `reason_code`; (2) pivot events to a per-visit partial row; (3) `MERGE` on `(facility_id, visit_id)`, setting each stage timestamp with `COALESCE(target, source)`. Out-of-order events fill in without overwriting, and replays or duplicates outside the watermark are harmless (idempotent) |
+| `silver_visits` | Stream from `bronze.ed_events` with `withWatermark('event_ts', '1 hour').dropDuplicatesWithinWatermark(['event_id'])`; `foreachBatch`: (1) validate and send failures to `silver.ed_events_quarantine` with a `reason_code`; (2) **de-identify** structured PHI on `ARRIVAL` events (§11.2) and drop the raw PHI fields and `chief_complaint_text`, so no raw PHI is written to silver; (3) pivot events to a per-visit partial row; (4) `MERGE` on `(facility_id, visit_id)`, setting each stage timestamp with `COALESCE(target, source)`. Out-of-order events fill in without overwriting, and replays or duplicates outside the watermark are harmless (idempotent) |
 | `silver_notes_ai` | Stream from `bronze.ed_events` filtered to `TRIAGE`; `foreachBatch` runs the AI chain (§9) and MERGEs into `silver.triage_notes` on `(facility_id, visit_id)`. It **never writes to `silver.ed_visits`**: each silver table has exactly one writer, which avoids concurrent-MERGE conflicts. Gold joins the two |
 | `ai_retry_sweep` | Separate task with a `rate` source and 15-minute trigger: re-runs the AI chain for `silver.triage_notes` rows with `ai_status = 'error'` and `ai_attempts < 3`. It writes only to `silver.triage_notes`; because it updates only error rows and `silver_notes_ai` only inserts new visits, the two don't conflict in practice under row-level concurrency |
 | `gold_metrics` | `rate` source, 1-minute trigger. `foreachBatch` reads the current state of `silver.ed_visits` left-joined to `silver.triage_notes` (in-ED visits plus departures within 24 h; 14-day hourly baselines cached and refreshed hourly), runs `compute_snapshots`, and MERGEs `facility_current`, `facility_snapshot_5min` (trailing 30 min) and `ed_board_current` (with `WHEN NOT MATCHED BY SOURCE THEN DELETE`) |
@@ -271,13 +271,13 @@ Every table has exactly one streaming writer. `ed_setup` writes before streaming
 
 Run in this order. Everything after step 1 runs on masked text only.
 
-1. `ai_mask(triage_note, array('person','phone number','date of birth','address','medical record number','email'))` produces `note_masked`.
-2. **Deterministic post-check**: regex for phone, `MRN-\d+`, dates and emails over `note_masked`. Any match is replaced with `[REDACTED]` and sets `residual_phi_flag = true`. This gives a measured `ai_mask` miss rate.
+1. `ai_mask(triage_note, array('person','phone number','date of birth','address','medical record number','email'))` produces `note_masked`. The same call is applied to `chief_complaint_text`, producing `chief_complaint_masked`. The `TRIAGE` event carries the chief complaint, so `silver_visits` never needs to call an LLM.
+2. **Deterministic post-check**: regex for phone, `MRN-\d+`, dates and emails over `note_masked` and `chief_complaint_masked`. Any match is replaced with `[REDACTED]` and sets `residual_phi_flag = true`. This gives a measured `ai_mask` miss rate.
 3. `ai_classify(note_masked, array('cardiac','respiratory','neurological','trauma','gastrointestinal','infectious','psychiatric','obstetric','musculoskeletal','other'))` produces `complaint_category`.
 4. `ai_extract(note_masked, array('heart_rate','blood_pressure','respiratory_rate','spo2','temperature','pain_score','symptom_onset'))` produces typed columns via `try_cast` (`bp_systolic`/`bp_diastolic` are parsed from `blood_pressure`).
 5. `ai_query(llm_endpoint, <ESI prompt>, responseFormat => {suggested_esi INT, rationale STRING}, failOnError => false)`. `undertriage_flag = (esi_level − suggested_esi) ≥ 2`. The UI labels this as demo decision-support, not clinical advice.
 
-`silver.triage_notes` stores **only** `note_masked` and the derived columns; the raw note exists only in bronze.
+`silver.triage_notes` stores **only** `note_masked`, `chief_complaint_masked` and the derived columns; the raw text exists only in bronze.
 
 **Backfill cost control:**
 - Notes with `event_ts < now − ai_backfill_days` (default 2) get only the deterministic regex masking, with `ai_enriched = false`.
@@ -320,10 +320,10 @@ All tables are **managed Delta**, liquid-clustered on their **MERGE keys** (appe
 
 - **`silver.ed_visits`:**
   - `facility_id`, `visit_id`, `arrival_ts`, `arrival_mode`, `esi_level`, `triage_ts`, `bed_assigned_ts`, `greet_ts`, `vent_start_ts`, `vent_end_ts`, `disposition`, `disposition_ts`, `lwbs_ts`, `departure_ts`;
-  - PHI: `patient_name`, `mrn`, `dob`, `sex`, `phone`, `address`;
-  - `mrn_hash`, `chief_complaint_text`, `last_event_ts`, `updated_at`.
-- **`silver.triage_notes`:** `facility_id`, `visit_id`, `triage_ts`, `esi_level`, `note_masked`, `residual_phi_flag`, `complaint_category`, `heart_rate`, `bp_systolic`, `bp_diastolic`, `respiratory_rate`, `spo2`, `temperature_c`, `pain_score`, `symptom_onset`, `suggested_esi`, `esi_rationale`, `undertriage_flag`, `ai_enriched`, `ai_status`, `ai_error`, `ai_attempts`, `processed_at`.
-- **`gold.visit_facts`** (view): non-PHI columns of `silver.ed_visits` left-joined to the non-text AI columns of `silver.triage_notes`, plus derived `d2p_min`, `los_h`, `boarding_h`.
+  - de-identified demographics (§11.2): `patient_name_redacted`, `mrn_hash`, `birth_year`, `age_at_arrival`, `sex`, `phone_last4`, `city`, `state`;
+  - `last_event_ts`, `updated_at`.
+- **`silver.triage_notes`:** `facility_id`, `visit_id`, `triage_ts`, `esi_level`, `note_masked`, `chief_complaint_masked`, `residual_phi_flag`, `complaint_category`, `heart_rate`, `bp_systolic`, `bp_diastolic`, `respiratory_rate`, `spo2`, `temperature_c`, `pain_score`, `symptom_onset`, `suggested_esi`, `esi_rationale`, `undertriage_flag`, `ai_enriched`, `ai_status`, `ai_error`, `ai_attempts`, `processed_at`.
+- **`gold.visit_facts`** (view): the operational columns of `silver.ed_visits` (plus `age_at_arrival`, `sex`; without `patient_name_redacted`, `phone_last4` or `mrn_hash`) left-joined to the non-text AI columns of `silver.triage_notes`, plus derived `d2p_min`, `los_h`, `boarding_h`.
 - **`gold.facility_current` / `facility_snapshot_5min`:**
   - keys and identity: `facility_id`, `snapshot_ts`, `computed_at`;
   - every metric column in §7;
@@ -342,31 +342,27 @@ All tables are **managed Delta**, liquid-clustered on their **MERGE keys** (appe
 |---|---|---|
 | `bronze` | Raw (structured + free text) | Job service principal, `ed_admins` |
 | `sim` | Raw (generator internals) | Job service principal, `ed_admins` |
-| `silver.ed_visits` | Structured PHI columns | Analysts; PHI columns masked by column-mask functions unless the user is in `ed_phi_readers` |
-| `silver.triage_notes` | Masked text only | Analysts |
+| `silver.ed_visits` | None (structured PHI de-identified before write) | Analysts |
+| `silver.triage_notes` | None (free text masked by `ai_mask` + regex before write) | Analysts |
 | `gold`, `ref` | None | Analysts, app service principal, Genie users |
 
-### 11.2 Structured PHI masking
+### 11.2 PHI de-identification (static, in the pipeline)
 
-**No ABAC** (decided). Structured PHI is protected with **per-column Unity Catalog column masks** (`ALTER TABLE … ALTER COLUMN … SET MASK`).
+**No Unity Catalog column masks or ABAC** (decided). PHI is removed **physically** before anything is written to silver. Raw PHI exists only in `bronze` and `sim`, protected by grants (§11.1). There are no dynamic masks, so no identity ever needs a "PHI reader" privilege beyond bronze.
 
-- There is one SQL UDF per `phi_type` in `<catalog>.ref`, named `mask_<phi_type>`.
-- Each UDF returns the raw value when `is_account_group_member('ed_phi_readers')` is true, and the masked value otherwise.
-- The governed tag still drives the mapping: `governance/masks.py` reads each column's `phi_type` from `metadata/tables.yml` and applies the matching UDF. Tags and masks therefore can't drift apart.
+**Structured fields** are redacted deterministically in `silver_visits`:
 
-| `phi_type` | Mask |
-|---|---|
-| `name` | `'REDACTED'` |
-| `mrn` | `'MRN-****' \|\| right(mrn, 2)` |
-| `dob` | year only (`date_trunc('year', dob)`) |
-| `contact` | `'***-***-' \|\| right(phone, 4)` |
-| `address` | city only |
+| Raw field (bronze) | Silver column | Rule | `deid_method` tag |
+|---|---|---|---|
+| `patient_name` | `patient_name_redacted` | constant `'REDACTED'` | `redacted` |
+| `mrn` | `mrn_hash` | `sha2(concat(mrn, <salt>), 256)`; salt in secret scope `ed_ops`, key `mrn_salt` | `hashed` |
+| `dob` | `birth_year`, `age_at_arrival` | year only; whole years at `arrival_ts` | `generalized` |
+| `phone` | `phone_last4` | last 4 digits | `generalized` |
+| `address` | `city`, `state` | street and ZIP dropped | `generalized` |
 
-The streaming job's run-as service principal **is** a member of `ed_phi_readers`. The `silver_visits` MERGE reads target PHI columns (through `COALESCE(target, source)` when an `ARRIVAL` event arrives after later events). If that read returned masked values, `REDACTED` would be written back permanently. The service principal already has raw bronze access, so this adds no exposure. Gold tasks never select PHI columns.
+`patient_name_redacted` and `phone_last4` are kept on purpose, to show "this is what redaction looks like" in the demo. `mrn_hash` lets analysts join and count distinct patients without seeing the MRN.
 
-As an extra safeguard, the MERGE sets PHI columns only with `CASE WHEN target.col IS NULL THEN source.col ELSE target.col END`, and a unit test asserts that the merge never writes a masked literal (`'REDACTED'`, `'MRN-****…'`).
-
-`mrn_hash = sha2(concat(mrn, <salt>), 256)`, with the salt in secret scope `ed_ops` (key `mrn_salt`). It lets analysts join and count distinct patients without seeing the MRN.
+**Free text** (`triage_note`, `chief_complaint_text`) is masked with `ai_mask` plus the regex post-check in `silver_notes_ai` (§9.1). Its `deid_method` tag is `ai_mask`.
 
 ### 11.3 Governed tags (created by `ed_setup`)
 
@@ -377,7 +373,8 @@ As an extra safeguard, the MERGE sets PHI columns only with `CASE WHEN target.co
 | `data_classification` | table, column | `phi`, `confidential`, `internal` |
 | `contains_phi` | table | `true`, `false` |
 | `data_origin` | table | `synthetic` |
-| `phi_type` | column | `name`, `mrn`, `dob`, `contact`, `address`, `free_text` |
+| `phi_type` | column | `name`, `mrn`, `dob`, `contact`, `address`, `free_text`. Applied to raw columns in `bronze` and `sim`, and to the de-identified silver columns derived from them |
+| `deid_method` | column | `redacted`, `hashed`, `generalized`, `ai_mask`. Required on every silver column carrying a `phi_type` tag |
 
 ### 11.4 Comments
 
@@ -388,7 +385,8 @@ Every table and column comment comes from `metadata/tables.yml`. Column comments
 1. Every table and column in the catalog has a non-empty comment.
 2. Every table has `layer`, `domain`, `data_classification`, `contains_phi`, `data_origin`.
 3. No column tagged `phi_type` exists in `gold`, `ref`, any synced table, or any table in the Genie space.
-4. Every `phi_type` column in `silver` is covered by a mask.
+4. Every `phi_type`-tagged column outside `bronze` and `sim` also has a `deid_method` tag.
+5. **Content scan:** the PHI regex set (phone, `MRN-\d+`, full dates of birth, emails) finds no matches in any `silver`, `gold` or `ref` string column (sampled). The generator's synthetic name list is also checked against `silver.triage_notes.note_masked` to estimate the `ai_mask` miss rate.
 
 ---
 
@@ -522,6 +520,7 @@ These run on the local Homebrew Spark 4.1.2 without Delta. All logic is written 
 - Event-to-visit folding: out-of-order, duplicates, LWBS.
 - Generator: per-visit timestamp ordering, no greet after LWBS, boarding for every admit, arrival rate within tolerance of the configured mean (seeded), mean D2P higher under higher load.
 - PHI regex post-check: catches each pattern; no false positives on vitals (for example `BP 120/80`).
+- De-identification (`governance/deid.py`): each structured rule (redact, salted hash is stable and salt-dependent, birth year and age at arrival, last 4 of phone, city/state); the de-identified `ARRIVAL` row carries no raw PHI field.
 - DDL generator: `tables.yml` produces the expected `CREATE TABLE … CLUSTER BY … COMMENT … TBLPROPERTIES`.
 
 ### 16.2 App tests
@@ -534,7 +533,7 @@ Runs at small scale (5 facilities, 1-day backfill, about 10 live ticks) in catal
 
 1. Rows flow bronze → silver → gold.
 2. Quarantine count is greater than 0 and matches the configured chaos.
-3. Governance checks in §11.5 pass.
+3. Governance checks in §11.5 pass, including the PHI content scan.
 4. A seeded **golden scenario** produces exactly the hand-calculated EDWIN, gEDWIN and NEDOCS. The scenario is a test-only facility `FAC000` in the validate catalog's `ref.facility` and `ref.physician_roster`, plus a fixed visit set loaded directly into `silver.ed_visits` and `silver.triage_notes`. It is never created in the main catalog.
 5. Synced tables exist and have the same row counts as their sources.
 6. Optionally, the Genie benchmark pass rate.
@@ -549,8 +548,8 @@ Runs at small scale (5 facilities, 1-day backfill, about 10 live ticks) in catal
 - **Artifacts:** Python wheel `ed_ops` and the frontend build.
 - **Resources:**
   - Jobs:
-    - `ed_setup` (serverless; idempotent): DDL, tags, ref data, backfill, historical snapshots, masks, Lakebase and synced tables, Genie space, governance checks.
-    - `ed_streaming` (continuous; **classic job cluster**, decided): **DBR 18 LTS** (`18.x-scala2.13`, Spark 4.1, which matches the local Spark 4.1.2 used for unit tests), **standard access mode** (supports Structured Streaming with `foreachBatch` and enforces column masks), single driver plus 1–2 workers, `streaming_node_type`. Runs as a service principal in `ed_phi_readers` (§11.2).
+    - `ed_setup` (serverless; idempotent): DDL, tags, grants, salt secret, ref data, backfill, historical snapshots, Lakebase synced tables, governance checks.
+    - `ed_streaming` (continuous; **classic job cluster**, decided): **DBR 18 LTS** (`18.x-scala2.13`, Spark 4.1, which matches the local Spark 4.1.2 used for unit tests), **standard access mode** (supports Structured Streaming with `foreachBatch`), single driver plus 1–2 workers, `streaming_node_type`. Runs as a dedicated service principal with read/write on `bronze`, `sim`, `silver`, `gold` and `ref`, and read on secret scope `ed_ops`.
     - `ed_validate` (serverless).
   - The app.
   - The Genie space (bundle `genie_spaces` resource, built from `genie/space.json`).
@@ -594,7 +593,7 @@ src/ed_ops/
   generator/          facilities.py, roster.py, journey.py, notes_templates.py, chaos.py, tick.py
   metrics/            formulas.py, snapshots.py
   pipeline/           bronze.py, silver_visits.py, silver_notes_ai.py, gold_metrics.py, gold_narratives.py
-  governance/         tags.py, masks.py, checks.py
+  governance/         tags.py, deid.py, grants.py, checks.py
   serving/            lakebase_sync.py, genie_space.py
 jobs/                 thin entry points per task
 genie/                space.json, benchmarks.yml
@@ -623,7 +622,7 @@ README.md
 **Resolved on the dev workspace (2026-11-09)**
 
 - Streaming runs on a classic cluster (decided); DBR 18 LTS is available.
-- No ABAC (decided); per-column masks are used.
+- No ABAC and no UC column masks (decided): PHI is de-identified physically in the pipeline (§11.2).
 - `databricks-claude-sonnet-5-5` is ready.
 - The app must call Genie (decided).
 - Bundles support `genie_spaces`, `database_instances`, `synced_database_tables` and `postgres_*`; apps support `genie_space` and `postgres` resources.
@@ -633,8 +632,7 @@ README.md
 
 1. CDF-based Continuous sync from managed, liquid-clustered Delta tables, including deletes from `ed_board_current`.
 2. `ai_mask`, `ai_classify` and `ai_extract` run on DBR 18 classic compute (otherwise run the AI chain in `foreachBatch` through the SQL warehouse).
-3. MERGE into a table with column masks succeeds for a principal in `ed_phi_readers`.
-4. On-behalf-of-user authorization is enabled for Databricks Apps on the workspace (the service-principal path works either way).
+3. On-behalf-of-user authorization is enabled for Databricks Apps on the workspace (the service-principal path works either way).
 
 ---
 

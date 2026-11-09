@@ -1,0 +1,82 @@
+resources:
+  jobs:
+    ed_setup:
+      name: ed-ops setup
+      description: >-
+        One-off, idempotent setup: DDL with comments and tags, reference data, patient population,
+        14-day patient-journey backfill, and bronze/silver/gold history.
+      max_concurrent_runs: 1
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "4"
+            dependencies:
+              - ../dist/*.whl
+      tasks:
+        - task_key: create_objects
+          environment_key: default
+          python_wheel_task:
+            package_name: ed_ops
+            entry_point: ed-ops-create-objects
+            named_parameters: &common
+              catalog: ${var.catalog}
+              schema_prefix: ${var.schema_prefix}
+              facility_count: ${var.facility_count}
+              backfill_days: ${var.backfill_days}
+              tick_seconds: ${var.tick_seconds}
+              timezone: ${var.timezone}
+              seed: ${var.seed}
+              checkpoint_version: ${var.checkpoint_version}
+              secret_scope: ${var.secret_scope}
+        - task_key: seed_reference
+          depends_on: [{task_key: create_objects}]
+          environment_key: default
+          python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-seed-reference, named_parameters: *common}
+        - task_key: backfill_generate
+          depends_on: [{task_key: seed_reference}]
+          environment_key: default
+          python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-backfill-generate, named_parameters: *common}
+        - task_key: backfill_ingest
+          depends_on: [{task_key: backfill_generate}]
+          environment_key: default
+          python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-backfill-ingest, named_parameters: *common}
+        - task_key: backfill_gold
+          depends_on: [{task_key: backfill_ingest}]
+          environment_key: default
+          python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-backfill-gold, named_parameters: *common}
+
+    ed_streaming:
+      name: ed-ops streaming
+      description: >-
+        Always-on simulator and medallion streams on a classic DBR 18 LTS standard-access cluster:
+        generator -> landing volume -> bronze (Auto Loader) -> silver visits -> gold crowding metrics.
+      continuous:
+        pause_status: ${var.streaming_pause_status}
+      job_clusters:
+        - job_cluster_key: streaming
+          new_cluster:
+            spark_version: 18.x-scala2.13
+            node_type_id: ${var.streaming_node_type}
+            num_workers: 1
+            data_security_mode: USER_ISOLATION
+            spark_conf:
+              spark.sql.session.timeZone: UTC
+            custom_tags:
+              project: ed-ops
+      tasks:
+        - task_key: generator
+          job_cluster_key: streaming
+          libraries: [{whl: ../dist/*.whl}]
+          python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-stream-generator, named_parameters: *common}
+        - task_key: bronze_ingest
+          job_cluster_key: streaming
+          libraries: [{whl: ../dist/*.whl}]
+          python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-stream-bronze, named_parameters: *common}
+        - task_key: silver_visits
+          job_cluster_key: streaming
+          libraries: [{whl: ../dist/*.whl}]
+          python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-stream-silver-visits, named_parameters: *common}
+        - task_key: gold_metrics
+          job_cluster_key: streaming
+          libraries: [{whl: ../dist/*.whl}]
+          python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-stream-gold-metrics, named_parameters: *common}

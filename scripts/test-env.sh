@@ -7,3 +7,5 @@ export PYTHONPATH="$SPARK_HOME/python/lib/pyspark.zip:$PY4J_ZIP:$(pwd)/src"
 export PYSPARK_PYTHON="$(pwd)/.venv/bin/python"
 export PYSPARK_DRIVER_PYTHON="$(pwd)/.venv/bin/python"
 export _ZO_DOCTOR=0
+# Project convention is naive UTC; PySpark converts timestamps via the OS time zone, so pin it (Databricks drivers run in UTC).
+export TZ=UTC

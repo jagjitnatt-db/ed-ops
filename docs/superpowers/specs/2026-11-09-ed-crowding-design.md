@@ -1,7 +1,7 @@
 # ED Crowding Command Center — Design Spec
 
 - **Date:** 2026-11-09
-- **Status:** Draft, awaiting review
+- **Status:** Revised (classic streaming cluster, no ABAC, app calls Genie, Lakebase Autoscaling), awaiting review
 - **Author:** Jagjit Natt (with Claude)
 - **Audience:** Databricks FE handover to customer (healthcare provider network)
 
@@ -291,7 +291,7 @@ Run in this order. Everything after step 1 runs on masked text only.
   - The table stores `input_json`, `model`, `generated_at`.
 - **`network_narrative`:** one row. The input is all facilities' bands, gEDWIN, D2P median and top driver. The output covers which facilities are crowded and why, which are doing well, and network-level actions.
 
-`llm_endpoint` is a bundle variable, defaulting to the latest Claude Sonnet Foundation Model API endpoint available in the workspace (confirmed at implementation).
+`llm_endpoint` is a bundle variable, default `databricks-claude-sonnet-5-5` (confirmed READY on the dev workspace).
 
 ---
 
@@ -342,13 +342,17 @@ All tables are **managed Delta**, liquid-clustered on their **MERGE keys** (appe
 |---|---|---|
 | `bronze` | Raw (structured + free text) | Job service principal, `ed_admins` |
 | `sim` | Raw (generator internals) | Job service principal, `ed_admins` |
-| `silver.ed_visits` | Structured PHI columns | Analysts; PHI masked by ABAC unless the user is in `ed_phi_readers` |
+| `silver.ed_visits` | Structured PHI columns | Analysts; PHI columns masked by column-mask functions unless the user is in `ed_phi_readers` |
 | `silver.triage_notes` | Masked text only | Analysts |
 | `gold`, `ref` | None | Analysts, app service principal, Genie users |
 
 ### 11.2 Structured PHI masking
 
-An **ABAC** policy on the catalog matches columns with governed tag `phi_type` and applies a mask function per value, unless the user is a member of `ed_phi_readers`:
+**No ABAC** (decided). Structured PHI is protected with **per-column Unity Catalog column masks** (`ALTER TABLE … ALTER COLUMN … SET MASK`).
+
+- There is one SQL UDF per `phi_type` in `<catalog>.ref`, named `mask_<phi_type>`.
+- Each UDF returns the raw value when `is_account_group_member('ed_phi_readers')` is true, and the masked value otherwise.
+- The governed tag still drives the mapping: `governance/masks.py` reads each column's `phi_type` from `metadata/tables.yml` and applies the matching UDF. Tags and masks therefore can't drift apart.
 
 | `phi_type` | Mask |
 |---|---|
@@ -358,7 +362,9 @@ An **ABAC** policy on the catalog matches columns with governed tag `phi_type` a
 | `contact` | `'***-***-' \|\| right(phone, 4)` |
 | `address` | city only |
 
-**Fallback:** if ABAC isn't available on the workspace, apply the same functions with per-column `ALTER TABLE … ALTER COLUMN … SET MASK`.
+The streaming job's run-as service principal **is** a member of `ed_phi_readers`. The `silver_visits` MERGE reads target PHI columns (through `COALESCE(target, source)` when an `ARRIVAL` event arrives after later events). If that read returned masked values, `REDACTED` would be written back permanently. The service principal already has raw bronze access, so this adds no exposure. Gold tasks never select PHI columns.
+
+As an extra safeguard, the MERGE sets PHI columns only with `CASE WHEN target.col IS NULL THEN source.col ELSE target.col END`, and a unit test asserts that the merge never writes a masked literal (`'REDACTED'`, `'MRN-****…'`).
 
 `mrn_hash = sha2(concat(mrn, <salt>), 256)`, with the salt in secret scope `ed_ops` (key `mrn_salt`). It lets analysts join and count distinct patients without seeing the MRN.
 
@@ -388,8 +394,14 @@ Every table and column comment comes from `metadata/tables.yml`. Column comments
 
 ## 12. Lakebase
 
-- One Lakebase instance (capacity is bundle variable `lakebase_capacity`, smallest by default) and database `ed_ops`. Provisioned or Autoscaling: whichever supports synced tables on the target workspace (confirmed at implementation).
-- Synced tables per §10. Sync modes are bundle variables (`sync_mode_live` default `CONTINUOUS`, `sync_mode_ref` default `SNAPSHOT`).
+- **Lakebase Autoscaling** (decided).
+  - The bundle declares a `postgres_projects` resource `ed-ops`, a `postgres_branches` resource per target (`dev`, or `production` for `customer`) and a `postgres_endpoints` read-write compute endpoint, with min/max capacity from `lakebase_min_cu` / `lakebase_max_cu` and scale-to-zero enabled.
+  - Postgres database: `ed_ops`.
+- **Synced tables** per §10 are created by `serving/lakebase_sync.py` in `ed_setup` through the SDK (`w.postgres.create_synced_table`), because bundles don't declare autoscaling synced tables yet. The step is idempotent: it creates a table if missing and leaves matching specs alone.
+  - Each synced table's primary key is the PK in §10.
+  - Sync modes are bundle variables: `sync_mode_live` (default `CONTINUOUS`) and `sync_mode_ref` (default `SNAPSHOT`).
+  - Continuous sync and the app's 30-second polling keep the compute awake during demos; scale-to-zero only saves cost when the solution is idle.
+- The app connects through a `postgres` app resource (project branch plus database) with `CAN_CONNECT_AND_CREATE`.
 - Postgres schema `app`, owned by the app service principal, is created empty and reserved for future write-back. Synced tables can't be written to, so write-back will need its own tables.
 - The app's service principal gets `SELECT` on the synced tables only.
 
@@ -416,7 +428,9 @@ Every table and column comment comes from `metadata/tables.yml`. Column comments
 | POST | `/api/genie/messages` | start or continue a Genie conversation (on-behalf-of-user token) |
 | GET | `/api/genie/conversations/{conv}/messages/{msg}` | poll result: text, SQL, result table |
 
-- Genie calls use **on-behalf-of-user** authorization (the user's UC permissions apply). If OBO isn't enabled, it falls back to the app service principal, and the UI notes this.
+- **The app must be able to call Genie** (requirement).
+  - The Genie space is declared as an app resource (`genie_space`, permission `CAN_RUN`), so the app service principal can always call it.
+  - When on-behalf-of-user authorization is enabled, the backend calls Genie with the user's forwarded token, so the user's UC permissions apply. Otherwise it uses the app service principal, which has `SELECT` only on the Genie space's PHI-free tables. Both paths are implemented and tested.
 
 ### 13.2 Frontend: React + Vite + TypeScript + `react-apexcharts`
 
@@ -446,7 +460,7 @@ There is no geographic map (ApexCharts can't draw one). The heatmap and bubble c
 
 ## 14. Genie space
 
-Defined in `genie/space.json`, created and updated by the SDK in `ed_setup`, running on serverless SQL warehouse `warehouse_id`.
+Defined in `genie/space.json` and deployed as a bundle `genie_spaces` resource, running on serverless SQL warehouse `warehouse_id`.
 
 - **Tables:**
   - `gold.facility_current`, `gold.facility_snapshot_5min`, `gold.visit_facts`
@@ -531,15 +545,16 @@ Runs at small scale (5 facilities, 1-day backfill, about 10 live ticks) in catal
 
 ### Databricks Asset Bundle (`databricks.yml`)
 
-- **Targets:** `dev` (FE VM workspace) and `customer` (template).
+- **Targets:** `dev` (FE VM workspace `https://fevm-hls-jagjit-lb-playground.cloud.databricks.com`, CLI profile `fevm-playground`) and `customer` (template).
 - **Artifacts:** Python wheel `ed_ops` and the frontend build.
 - **Resources:**
   - Jobs:
     - `ed_setup` (serverless; idempotent): DDL, tags, ref data, backfill, historical snapshots, masks, Lakebase and synced tables, Genie space, governance checks.
-    - `ed_streaming` (continuous; classic job cluster, **standard access mode**, latest LTS DBR): the classic cluster is needed because serverless streaming supports only `availableNow` triggers (to be re-verified at implementation). Standard access mode enforces ABAC masks on reads.
+    - `ed_streaming` (continuous; **classic job cluster**, decided): **DBR 18 LTS** (`18.x-scala2.13`, Spark 4.1, which matches the local Spark 4.1.2 used for unit tests), **standard access mode** (supports Structured Streaming with `foreachBatch` and enforces column masks), single driver plus 1–2 workers, `streaming_node_type`. Runs as a service principal in `ed_phi_readers` (§11.2).
     - `ed_validate` (serverless).
   - The app.
-  - The Lakebase instance and synced tables, using bundle resources where supported and SDK calls in `ed_setup` otherwise.
+  - The Genie space (bundle `genie_spaces` resource, built from `genie/space.json`).
+  - Lakebase resources and synced tables (§12).
 
 ### Variables
 
@@ -552,9 +567,9 @@ Runs at small scale (5 facilities, 1-day backfill, about 10 live ticks) in catal
 | `tick_seconds` | 60 |
 | `dup_rate` / `late_rate` / `malformed_rate` | 0.01 / 0.02 / 0.005 |
 | `live_surge_offset_min` / `live_surge_duration_min` | 30 / 90 |
-| `llm_endpoint` | latest Claude Sonnet FMAPI endpoint (confirmed at implementation) |
-| `warehouse_id` | — (required) |
-| `lakebase_capacity` | smallest |
+| `llm_endpoint` | `databricks-claude-sonnet-5-5` |
+| `warehouse_id` | dev: `abef38163a09f120` (Serverless Starter Warehouse); required for other targets |
+| `lakebase_min_cu` / `lakebase_max_cu` | 0.5 / 2 |
 | `sync_mode_live` / `sync_mode_ref` | `CONTINUOUS` / `SNAPSHOT` |
 | `timezone` | `America/Chicago` |
 | `seed` | 42 |
@@ -563,7 +578,7 @@ Runs at small scale (5 facilities, 1-day backfill, about 10 live ticks) in catal
 
 ### Teardown
 
-`databricks bundle destroy` plus `scripts/teardown.sh`: drop the catalog(s), delete the Lakebase instance and the Genie space.
+`databricks bundle destroy` (removes jobs, app, Genie space and the Lakebase project) plus `scripts/teardown.sh` (deletes synced tables, then drops the catalog(s)).
 
 ---
 
@@ -571,7 +586,7 @@ Runs at small scale (5 facilities, 1-day backfill, about 10 live ticks) in catal
 
 ```
 databricks.yml
-resources/            jobs.yml, app.yml, lakebase.yml
+resources/            jobs.yml, app.yml, lakebase.yml (postgres project/branch/endpoint), genie.yml
 metadata/             tables.yml, tags.yml
 src/ed_ops/
   config.py
@@ -605,14 +620,21 @@ README.md
 4. Flow metrics use 24 h windows; D2P uses 1 h.
 5. All facilities are in one timezone.
 
-**Verify on the target workspace before building the dependent part**
+**Resolved on the dev workspace (2026-11-09)**
 
-1. Lakebase flavour (Provisioned or Autoscaling) and synced-table support, including CDF-based Continuous sync from managed Delta tables.
-2. ABAC availability (otherwise use the per-column mask fallback).
-3. Serverless streaming trigger support (could remove the need for a classic cluster).
-4. Available Claude FMAPI endpoint name for `llm_endpoint`; `ai_mask`, `ai_classify` and `ai_extract` availability.
-5. On-behalf-of-user authorization for Databricks Apps (Genie scope).
-6. Bundle resource support for Lakebase instances, synced tables and Genie spaces (otherwise use SDK calls in `ed_setup`).
+- Streaming runs on a classic cluster (decided); DBR 18 LTS is available.
+- No ABAC (decided); per-column masks are used.
+- `databricks-claude-sonnet-5-5` is ready.
+- The app must call Genie (decided).
+- Bundles support `genie_spaces`, `database_instances`, `synced_database_tables` and `postgres_*`; apps support `genie_space` and `postgres` resources.
+- Both Lakebase flavours exist on the workspace and support synced tables. **Autoscaling chosen** (decided).
+
+**Still to verify when building the dependent part**
+
+1. CDF-based Continuous sync from managed, liquid-clustered Delta tables, including deletes from `ed_board_current`.
+2. `ai_mask`, `ai_classify` and `ai_extract` run on DBR 18 classic compute (otherwise run the AI chain in `foreachBatch` through the SQL warehouse).
+3. MERGE into a table with column masks succeeds for a principal in `ed_phi_readers`.
+4. On-behalf-of-user authorization is enabled for Databricks Apps on the workspace (the service-principal path works either way).
 
 ---
 
@@ -621,6 +643,6 @@ README.md
 - gEDWIN / EDWIN: *gEDWIN: a simple and practical index for real-time monitoring of emergency department crowding.* BMC Emergency Medicine, 2025. https://pmc.ncbi.nlm.nih.gov/articles/PMC12648796/
 - NEDOCS: Weiss SJ et al. *Estimating the degree of emergency department overcrowding in academic medical centers: results of the National ED Overcrowding Study (NEDOCS).* Acad Emerg Med, 2004.
 - Databricks AI functions: https://docs.databricks.com/aws/en/large-language-models/ai-functions
-- Lakebase synced tables: https://docs.databricks.com/aws/en/oltp/instances/sync-data/sync-table
+- Lakebase Autoscaling synced tables: https://docs.databricks.com/aws/en/oltp/projects/sync-tables
 - ApexCharts: https://github.com/apexcharts/apexcharts.js
 - dbldatagen: https://github.com/databrickslabs/dbldatagen

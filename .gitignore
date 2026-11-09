@@ -32,3 +32,7 @@ derby.log
 # Secrets
 .env
 *.pem
+
+# local
+.venv/
+.superpowers/

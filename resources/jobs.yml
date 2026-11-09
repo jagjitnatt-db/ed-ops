@@ -28,6 +28,7 @@ resources:
               seed: ${var.seed}
               checkpoint_version: ${var.checkpoint_version}
               secret_scope: ${var.secret_scope}
+              tag_prefix: ${var.tag_prefix}
         - task_key: seed_reference
           depends_on: [{task_key: create_objects}]
           environment_key: default

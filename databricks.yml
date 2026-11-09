@@ -38,6 +38,9 @@ variables:
   secret_scope:
     description: Secret scope that holds the MRN hashing salt.
     default: ed_ops
+  tag_prefix:
+    description: Prefix for Unity Catalog tag keys (ed_layer, ed_data_classification, ...); avoids clashing with existing governed tag policies. Empty uses the bare spec names.
+    default: ed_
   streaming_node_type:
     description: Node type of the classic streaming job cluster.
     default: m5d.xlarge

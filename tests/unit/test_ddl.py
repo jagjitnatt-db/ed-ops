@@ -77,8 +77,15 @@ def test_create_table_sql_has_pk_clustering_cdf_and_escaped_comments():
     assert "'delta.enableChangeDataFeed' = 'true'" in sql
 
 
+def test_tag_keys_are_prefixed_by_default_to_avoid_existing_governed_tags():
+    t = parse_catalog_def(_minimal_doc()).table("gold", "t")
+    tags = generate.tag_sqls(Config(), t)
+    assert "('ed_layer' = 'gold', 'ed_domain' = 'ed'" in tags[0]
+    assert tags[1].endswith("ALTER COLUMN v SET TAGS ('ed_unit' = 'count')")
+
+
 def test_tag_and_comment_statements():
-    cfg = Config()
+    cfg = Config(tag_prefix="")
     t = parse_catalog_def(_minimal_doc()).table("gold", "t")
     tags = generate.tag_sqls(cfg, t)
     assert tags[0] == (

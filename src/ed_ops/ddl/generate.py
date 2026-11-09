@@ -10,8 +10,8 @@ def sql_string(value: str) -> str:
     return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
 
 
-def _tag_pairs(tags: dict[str, str]) -> str:
-    return ", ".join(f"{sql_string(k)} = {sql_string(v)}" for k, v in tags.items())
+def _tag_pairs(tags: dict[str, str], prefix: str) -> str:
+    return ", ".join(f"{sql_string(prefix + k)} = {sql_string(v)}" for k, v in tags.items())
 
 
 def create_schema_sql(cfg: Config, logical: str, comment: str) -> str:
@@ -47,8 +47,8 @@ def comment_sqls(cfg: Config, t: TableDef) -> list[str]:
 
 def tag_sqls(cfg: Config, t: TableDef) -> list[str]:
     fq = cfg.table(t.schema, t.name)
-    stmts = [f"ALTER TABLE {fq} SET TAGS ({_tag_pairs(t.tags)})"]
-    stmts += [f"ALTER TABLE {fq} ALTER COLUMN {c.name} SET TAGS ({_tag_pairs(c.tags)})" for c in t.columns if c.tags]
+    stmts = [f"ALTER TABLE {fq} SET TAGS ({_tag_pairs(t.tags, cfg.tag_prefix)})"]
+    stmts += [f"ALTER TABLE {fq} ALTER COLUMN {c.name} SET TAGS ({_tag_pairs(c.tags, cfg.tag_prefix)})" for c in t.columns if c.tags]
     return stmts
 
 

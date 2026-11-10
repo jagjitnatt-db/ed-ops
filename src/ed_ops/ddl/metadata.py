@@ -57,16 +57,33 @@ class VolumeDef:
 
 
 @dataclass(frozen=True)
+class ViewDef:
+    schema: str
+    name: str
+    comment: str
+    sql: str  # SELECT with {bronze}/{silver}/{gold}/{ref}/{sim}/{serving} schema placeholders
+    columns: tuple[ColumnDef, ...]
+    tags: dict[str, str]
+
+
+@dataclass(frozen=True)
 class CatalogDef:
     schemas: dict[str, str]
     volumes: tuple[VolumeDef, ...]
     tables: tuple[TableDef, ...]
+    views: tuple[ViewDef, ...] = ()
 
     def table(self, schema: str, name: str) -> TableDef:
         for t in self.tables:
             if t.schema == schema and t.name == name:
                 return t
         raise KeyError(f"no table {schema}.{name} in metadata")
+
+    def view(self, schema: str, name: str) -> ViewDef:
+        for v in self.views:
+            if v.schema == schema and v.name == name:
+                return v
+        raise KeyError(f"no view {schema}.{name} in metadata")
 
 
 def _tag_value(value: object) -> str:
@@ -135,7 +152,26 @@ def parse_catalog_def(doc: dict) -> CatalogDef:
         by_key[(table.schema, table.name)] = table
         tables.append(table)
     volumes = tuple(VolumeDef(**v) for v in doc.get("volumes", []))
-    return CatalogDef(schemas=schemas, volumes=volumes, tables=tuple(tables))
+    views = []
+    for raw in doc.get("views", []):
+        view = ViewDef(
+            schema=raw["schema"],
+            name=raw["name"],
+            comment=raw.get("comment", ""),
+            sql=raw["sql"].strip(),
+            columns=tuple(ColumnDef(name=c["name"], type="", comment=c.get("comment", "")) for c in raw["columns"]),
+            tags={k: _tag_value(v) for k, v in {"layer": raw["schema"], **default_tags, **raw.get("tags", {})}.items()},
+        )
+        where = f"{view.schema}.{view.name}"
+        if view.schema not in schemas or not view.comment.strip():
+            raise MetadataError(f"{where}: view needs a declared schema and a comment")
+        if any(not c.comment.strip() for c in view.columns):
+            raise MetadataError(f"{where}: every view column needs a comment")
+        for key in REQUIRED_TABLE_TAGS:
+            if key not in view.tags:
+                raise MetadataError(f"{where}: required tag {key!r} missing")
+        views.append(view)
+    return CatalogDef(schemas=schemas, volumes=volumes, tables=tuple(tables), views=tuple(views))
 
 
 def load_catalog_def(path: str | Path | None = None) -> CatalogDef:

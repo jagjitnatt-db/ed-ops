@@ -31,6 +31,14 @@ class Config:
     narrative_minutes: int = 15
     ai_retry_minutes: int = 15
     streaming_job_id: str = ""  # ed_streaming job id; ed_setup refuses AI/gold backfills while it has an active run
+    warehouse_id: str = ""
+    lakebase_project_id: str = "ed-ops-dev"
+    lakebase_branch: str = "production"
+    lakebase_database: str = "databricks_postgres"
+    sync_mode_live: str = "CONTINUOUS"
+    sync_mode_ref: str = "SNAPSHOT"
+    app_name: str = ""
+    genie_space_title: str = "ED Ops Crowding Assistant"
 
     def __post_init__(self) -> None:
         if self.tick_seconds <= 0 or self.tick_seconds % 60 != 0:

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from ed_ops.config import Config
-from ed_ops.ddl.metadata import CatalogDef, TableDef, VolumeDef
+from ed_ops.config import LOGICAL_SCHEMAS, Config
+from ed_ops.ddl.metadata import CatalogDef, TableDef, ViewDef, VolumeDef
 
 
 def sql_string(value: str) -> str:
@@ -52,6 +52,16 @@ def tag_sqls(cfg: Config, t: TableDef) -> list[str]:
     return stmts
 
 
+def create_view_sql(cfg: Config, v: ViewDef) -> str:
+    cols = ",\n  ".join(f"{c.name} COMMENT {sql_string(c.comment)}" for c in v.columns)
+    select = v.sql.format(**{logical: cfg.schema(logical) for logical in LOGICAL_SCHEMAS})
+    return f"CREATE OR REPLACE VIEW {cfg.table(v.schema, v.name)} (\n  {cols}\n)\nCOMMENT {sql_string(v.comment)}\nAS {select}"
+
+
+def view_tag_sqls(cfg: Config, v: ViewDef) -> list[str]:
+    return [f"ALTER VIEW {cfg.table(v.schema, v.name)} SET TAGS ({_tag_pairs(v.tags, cfg.tag_prefix)})"]
+
+
 def ddl_statements(cfg: Config, cat: CatalogDef) -> list[str]:
     stmts = [create_schema_sql(cfg, logical, comment) for logical, comment in cat.schemas.items()]
     stmts += [create_volume_sql(cfg, v) for v in cat.volumes]
@@ -59,4 +69,7 @@ def ddl_statements(cfg: Config, cat: CatalogDef) -> list[str]:
     for t in cat.tables:
         stmts += comment_sqls(cfg, t)
         stmts += tag_sqls(cfg, t)
+    for v in cat.views:
+        stmts.append(create_view_sql(cfg, v))
+        stmts += view_tag_sqls(cfg, v)
     return stmts

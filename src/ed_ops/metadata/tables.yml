@@ -121,9 +121,9 @@ tables:
       - {name: esi_rationale, type: STRING, comment: "Short ai_query rationale for suggested_esi."}
       - {name: undertriage_flag, type: BOOLEAN, comment: "True when esi_level - suggested_esi >= 2."}
       - {name: ai_enriched, type: BOOLEAN, comment: "True when the AI chain ran; false for backfill notes older than ai_backfill_days."}
-      - {name: ai_status, type: STRING, comment: "ok, error or parse_error."}
-      - {name: ai_error, type: STRING, comment: "Last AI error message, if any."}
-      - {name: ai_attempts, type: INT, comment: "Number of AI chain attempts."}
+      - {name: ai_status, type: STRING, comment: "ok, error, parse_error or skipped (older than ai_backfill_days: no AI ran and no text is stored)."}
+      - {name: ai_error, type: STRING, comment: "Last AI error message; for parse_error, the first 500 characters of the model reply."}
+      - {name: ai_attempts, type: INT, comment: "Number of AI chain attempts (1 on first processing, including skipped rows)."}
       - {name: processed_at, type: TIMESTAMP, comment: "When the row was last written, UTC."}
 
   - schema: gold
@@ -351,3 +351,49 @@ tables:
       - {name: input_json, type: STRING, comment: "Exact JSON sent to the model."}
       - {name: model, type: STRING, comment: "Model serving endpoint that wrote the summary."}
       - {name: generated_at, type: TIMESTAMP, comment: "When the summary was generated, UTC."}
+
+views:
+  - schema: gold
+    name: visit_facts
+    comment: "One row per ED visit for analysis and Genie: journey timestamps, derived waits and lengths of stay, AI complaint category and suggested ESI. De-identified (no names, MRNs, phones or addresses)."
+    tags: {data_classification: internal, contains_phi: "false"}
+    sql: |
+      SELECT
+        v.facility_id, f.facility_name, f.facility_type, f.region, v.visit_id, v.arrival_ts, v.arrival_mode, v.esi_level,
+        n.suggested_esi, n.undertriage_flag, n.complaint_category, n.ai_status,
+        v.triage_ts, v.bed_assigned_ts, v.greet_ts, v.disposition, v.disposition_ts, v.lwbs_ts, v.departure_ts,
+        v.age_at_arrival, v.sex,
+        CASE WHEN v.greet_ts >= v.arrival_ts THEN (unix_timestamp(v.greet_ts) - unix_timestamp(v.arrival_ts)) / 60.0 END,
+        CASE WHEN v.departure_ts >= v.arrival_ts THEN (unix_timestamp(v.departure_ts) - unix_timestamp(v.arrival_ts)) / 3600.0 END,
+        CASE WHEN v.disposition = 'ADMIT' AND v.departure_ts >= v.disposition_ts
+             THEN (unix_timestamp(v.departure_ts) - unix_timestamp(v.disposition_ts)) / 3600.0 END,
+        v.lwbs_ts IS NOT NULL
+      FROM {silver}.ed_visits v
+      LEFT JOIN {silver}.triage_notes n ON n.facility_id = v.facility_id AND n.visit_id = v.visit_id
+      LEFT JOIN {ref}.facility f ON f.facility_id = v.facility_id
+    columns:
+      - {name: facility_id, comment: "Facility identifier (FACnnn)."}
+      - {name: facility_name, comment: "Facility display name."}
+      - {name: facility_type, comment: "level_1_trauma, community, rural_critical_access or pediatric."}
+      - {name: region, comment: "Health-system region."}
+      - {name: visit_id, comment: "Visit identifier."}
+      - {name: arrival_ts, comment: "Arrival (door) time, UTC."}
+      - {name: arrival_mode, comment: "walk_in or ambulance."}
+      - {name: esi_level, comment: "Nurse-assigned ESI 1 (most acute) to 5."}
+      - {name: suggested_esi, comment: "AI-suggested ESI from the masked triage note (decision support only)."}
+      - {name: undertriage_flag, comment: "True when the nurse ESI is at least 2 levels less acute than the AI-suggested ESI."}
+      - {name: complaint_category, comment: "AI complaint category (cardiac, respiratory, neurological, trauma, ...)."}
+      - {name: ai_status, comment: "AI enrichment status: ok, error, parse_error or skipped."}
+      - {name: triage_ts, comment: "Triage time, UTC."}
+      - {name: bed_assigned_ts, comment: "Treatment bed assignment time, UTC."}
+      - {name: greet_ts, comment: "Provider greet time, UTC."}
+      - {name: disposition, comment: "DISCHARGE, ADMIT or TRANSFER."}
+      - {name: disposition_ts, comment: "Disposition decision time, UTC (admit decision for ADMIT)."}
+      - {name: lwbs_ts, comment: "Left-without-being-seen time, UTC."}
+      - {name: departure_ts, comment: "Time the patient left the ED, UTC (lwbs_ts for LWBS)."}
+      - {name: age_at_arrival, comment: "Age in whole years at arrival."}
+      - {name: sex, comment: "Recorded sex: F or M."}
+      - {name: d2p_min, comment: "Door-to-provider minutes (greet_ts - arrival_ts); null if never greeted."}
+      - {name: los_h, comment: "Length of stay in hours (departure_ts - arrival_ts); null while still in the ED."}
+      - {name: boarding_h, comment: "Hours from admit decision to departure for admitted patients."}
+      - {name: left_without_being_seen, comment: "True when the patient left without being seen."}

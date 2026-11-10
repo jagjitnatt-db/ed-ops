@@ -160,3 +160,26 @@ def governance_checks(spark: SparkSession, cfg: Config) -> None:
         print(f"VIOLATION {v.check}: {v.object} - {v.detail}")
     if violations:
         raise RuntimeError(f"{len(violations)} governance violation(s); see output above")
+
+
+def serving_setup(spark: SparkSession, cfg: Config) -> None:
+    """Create the Lakebase synced tables (idempotent), wait until online, grant the app's role SELECT."""
+    from databricks.sdk import WorkspaceClient
+
+    from ed_ops.serving import lakebase
+
+    w = WorkspaceClient()
+    lakebase.ensure_synced_tables(w, cfg)
+    lakebase.wait_until_online(w, cfg)
+    lakebase.apply_grants(w, cfg, lakebase.app_role(w, cfg))
+
+
+def genie_space(spark: SparkSession, cfg: Config) -> None:
+    """Create or update the Genie space by title (after its tables exist) and let the app service principal run it."""
+    from databricks.sdk import WorkspaceClient
+
+    from ed_ops.serving.genie_space import build_serialized_space, grant_can_run, load_space_doc, upsert_genie_space
+
+    w = WorkspaceClient()
+    space_id = upsert_genie_space(w, cfg, build_serialized_space(cfg, load_space_doc()))
+    grant_can_run(w, space_id, w.apps.get(name=cfg.app_name).service_principal_client_id)

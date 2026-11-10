@@ -100,3 +100,17 @@ def validate_pipeline() -> None:
 
 def teardown_schemas() -> None:
     _run(validation.teardown_schemas)
+
+
+def serving_setup() -> None:
+    _run(setup.serving_setup)
+
+
+def genie_space() -> None:
+    _run(setup.genie_space)
+
+
+def genie_benchmarks() -> None:
+    from ed_ops.serving.genie_benchmarks import run_benchmarks
+
+    _run(lambda spark, cfg: run_benchmarks(spark, cfg) and None)

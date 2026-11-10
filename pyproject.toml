@@ -38,6 +38,9 @@ ed-ops-stream-narratives = "ed_ops.cli:stream_narratives"
 ed-ops-validate-golden = "ed_ops.cli:validate_golden"
 ed-ops-validate-pipeline = "ed_ops.cli:validate_pipeline"
 ed-ops-teardown-schemas = "ed_ops.cli:teardown_schemas"
+ed-ops-serving-setup = "ed_ops.cli:serving_setup"
+ed-ops-genie-space = "ed_ops.cli:genie_space"
+ed-ops-genie-benchmarks = "ed_ops.cli:genie_benchmarks"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ed_ops"]

@@ -4,6 +4,10 @@ bundle:
 include:
   - resources/*.yml
 
+sync:
+  include:
+    - app/frontend/dist/**
+
 artifacts:
   ed_ops_wheel:
     type: whl
@@ -53,6 +57,33 @@ variables:
   ai_retry_minutes:
     description: Minutes between AI retry sweeps.
     default: "15"
+  warehouse_id:
+    description: SQL warehouse for Genie and the app (required for every target).
+    default: ""
+  lakebase_project_id:
+    description: Lakebase Autoscaling project id (lowercase letters, digits, hyphens).
+    default: ed-ops-${bundle.target}
+  lakebase_branch:
+    description: Lakebase branch serving the app.
+    default: production
+  lakebase_database:
+    description: Postgres database holding the synced tables.
+    default: databricks_postgres
+  sync_mode_live:
+    description: Sync mode for live gold tables (CONTINUOUS or TRIGGERED).
+    default: CONTINUOUS
+  sync_mode_ref:
+    description: Sync mode for reference tables.
+    default: SNAPSHOT
+  app_name:
+    description: Databricks App name.
+    default: ed-ops-${bundle.target}
+  genie_space_title:
+    description: Title of the Genie space (the app finds the space by this title).
+    default: ED Ops Crowding Assistant (${bundle.target})
+  run_as_service_principal:
+    description: Application id of the service principal that runs the jobs in the customer target.
+    default: ""
   streaming_node_type:
     description: Node type of the classic streaming job cluster (Graviton; on-demand, Photon).
     default: r7gd.2xlarge
@@ -68,3 +99,10 @@ targets:
       host: https://fevm-hls-jagjit-lb-playground.cloud.databricks.com
     variables:
       secret_scope: ed_ops_${workspace.current_user.short_name}
+      warehouse_id: abef38163a09f120
+  customer:
+    # Template for the customer workspace: authenticate with a CLI profile for that workspace and pass
+    # --var catalog=<existing catalog> --var warehouse_id=<warehouse> --var run_as_service_principal=<application id>.
+    mode: production
+    run_as:
+      service_principal_name: ${var.run_as_service_principal}

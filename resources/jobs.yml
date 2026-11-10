@@ -33,6 +33,14 @@ resources:
               llm_endpoint: ${var.llm_endpoint}
               narrative_minutes: ${var.narrative_minutes}
               ai_retry_minutes: ${var.ai_retry_minutes}
+              warehouse_id: ${var.warehouse_id}
+              lakebase_project_id: ${var.lakebase_project_id}
+              lakebase_branch: ${var.lakebase_branch}
+              lakebase_database: ${var.lakebase_database}
+              sync_mode_live: ${var.sync_mode_live}
+              sync_mode_ref: ${var.sync_mode_ref}
+              app_name: ${resources.apps.ed_ops.name}
+              genie_space_title: ${var.genie_space_title}
         - task_key: seed_reference
           depends_on: [{task_key: create_objects}]
           environment_key: default
@@ -65,6 +73,14 @@ resources:
           depends_on: [{task_key: backfill_narratives}]
           environment_key: default
           python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-governance-checks, named_parameters: *common}
+        - task_key: serving_setup
+          depends_on: [{task_key: governance_checks}]
+          environment_key: default
+          python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-serving-setup, named_parameters: *common}
+        - task_key: genie_space
+          depends_on: [{task_key: serving_setup}]
+          environment_key: default
+          python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-genie-space, named_parameters: *common}
 
     ed_streaming:
       name: ed-ops streaming
@@ -118,3 +134,18 @@ resources:
           job_cluster_key: streaming
           libraries: [{whl: ../dist/*.whl}]
           python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-stream-narratives, named_parameters: *common}
+
+    ed_genie_benchmarks:
+      name: ed-ops genie benchmarks
+      description: Asks every benchmark question through the Genie Conversation API and compares with the expected SQL.
+      max_concurrent_runs: 1
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "4"
+            dependencies:
+              - ../dist/*.whl
+      tasks:
+        - task_key: genie_benchmarks
+          environment_key: default
+          python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-genie-benchmarks, named_parameters: *common}

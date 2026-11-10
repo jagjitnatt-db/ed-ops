@@ -1,0 +1,24 @@
+resources:
+  apps:
+    ed_ops:
+      name: ${var.app_name}
+      description: ED crowding command center - live EDWIN/gEDWIN/NEDOCS, waits, boarding, AI narratives and Genie.
+      source_code_path: ../app
+      user_api_scopes: [dashboards.genie, sql]
+      resources:
+        - name: lakebase
+          postgres:
+            branch: projects/${var.lakebase_project_id}/branches/${var.lakebase_branch}
+            database: projects/${var.lakebase_project_id}/branches/${var.lakebase_branch}/databases/databricks-postgres
+            permission: CAN_CONNECT_AND_CREATE
+        - name: warehouse
+          sql_warehouse:
+            id: ${var.warehouse_id}
+            permission: CAN_USE
+      config:
+        command: [uvicorn, backend.main:app, --host, 0.0.0.0, --port, "8000"]
+        env:
+          - {name: SERVING_SCHEMA, value: "${var.schema_prefix}serving"}
+          - {name: LAKEBASE_ENDPOINT, value: "projects/${var.lakebase_project_id}/branches/${var.lakebase_branch}/endpoints/primary"}
+          - {name: GENIE_SPACE_TITLE, value: "${var.genie_space_title}"}
+          - {name: LOCAL_TZ, value: "${var.timezone}"}

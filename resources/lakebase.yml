@@ -1,0 +1,10 @@
+resources:
+  postgres_projects:
+    ed_ops_lakebase:
+      project_id: ${var.lakebase_project_id}
+      display_name: ED Ops serving (${bundle.target})
+      pg_version: 17
+      default_endpoint_settings:
+        autoscaling_limit_min_cu: 0.5
+        autoscaling_limit_max_cu: 2
+        suspend_timeout_duration: 600s

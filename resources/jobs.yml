@@ -12,6 +12,7 @@ resources:
             environment_version: "4"
             dependencies:
               - ../dist/*.whl
+              - databricks-sdk>=0.164.0
       tasks:
         - task_key: create_objects
           environment_key: default
@@ -145,6 +146,7 @@ resources:
             environment_version: "4"
             dependencies:
               - ../dist/*.whl
+              - databricks-sdk>=0.164.0
       tasks:
         - task_key: genie_benchmarks
           environment_key: default

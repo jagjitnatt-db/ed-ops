@@ -81,3 +81,11 @@ def test_serving_resources_and_customer_target():
     assert customer["mode"] == "production" and customer["run_as"] == {"service_principal_name": "${var.run_as_service_principal}"}
     assert bundle["targets"]["dev"]["variables"]["warehouse_id"] == "abef38163a09f120"
     assert (ROOT / "scripts" / "deploy.sh").stat().st_mode & 0o111
+
+
+def test_serverless_jobs_pin_an_sdk_with_the_postgres_api():
+    """Serverless environment 4 ships a databricks-sdk without databricks.sdk.service.postgres (Lakebase Autoscaling)."""
+    jobs = _jobs()
+    for job in ("ed_setup", "ed_genie_benchmarks"):
+        deps = jobs[job]["environments"][0]["spec"]["dependencies"]
+        assert "databricks-sdk>=0.164.0" in deps, job

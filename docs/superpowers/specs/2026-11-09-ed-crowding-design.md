@@ -62,7 +62,7 @@ Choices made during design:
 ## 3. Unity Catalog layout
 
 - **Catalog:** bundle variable `catalog`.
-  - Default: **`hls_jagjit_lb_playground_catalog`** (existing).
+  - Default: **`<catalog>`** (existing).
   - The solution **never creates or drops a catalog** (decided). It only creates schemas inside an existing catalog. A customer sets `catalog` to one of their own existing catalogs.
 - **Schemas:** physical name is `{schema_prefix}{logical}`, with bundle variable `schema_prefix` (default `ed_`), so the solution can sit inside a shared catalog.
   - This spec uses **logical** names throughout: `silver.ed_visits` means `<catalog>.ed_silver.ed_visits`.
@@ -571,7 +571,7 @@ Runs at small scale (5 facilities, 1-day backfill, about 10 live ticks) in the s
 
 ### Databricks Asset Bundle (`databricks.yml`)
 
-- **Targets:** `dev` (FE VM workspace `https://fevm-hls-jagjit-lb-playground.cloud.databricks.com`, CLI profile `fevm-playground`) and `customer` (template).
+- **Targets:** `dev` (FE VM workspace `https://<workspace-host>`, CLI profile `<profile>`) and `customer` (template).
 - **Artifacts:** Python wheel `ed_ops` and the frontend build.
 - **Resources:**
   - Jobs:
@@ -586,7 +586,7 @@ Runs at small scale (5 facilities, 1-day backfill, about 10 live ticks) in the s
 
 | Variable | Default |
 |---|---|
-| `catalog` | `hls_jagjit_lb_playground_catalog` (must already exist) |
+| `catalog` | `<catalog>` (must already exist) |
 | `schema_prefix` | `ed_` |
 | `facility_count` | 50 |
 | `backfill_days` | 14 |
@@ -595,7 +595,7 @@ Runs at small scale (5 facilities, 1-day backfill, about 10 live ticks) in the s
 | `dup_rate` / `late_rate` / `malformed_rate` | 0.01 / 0.02 / 0.005 |
 | `live_surge_offset_min` / `live_surge_duration_min` | 30 / 90 |
 | `llm_endpoint` | `databricks-claude-sonnet-5-5` |
-| `warehouse_id` | dev: `abef38163a09f120` (Serverless Starter Warehouse); required for other targets |
+| `warehouse_id` | dev: `<warehouse-id>` (Serverless Starter Warehouse); required for other targets |
 | `lakebase_min_cu` / `lakebase_max_cu` | 0.5 / 2 |
 | `sync_mode_live` / `sync_mode_ref` | `CONTINUOUS` / `SNAPSHOT` |
 | `timezone` | `America/Chicago` |
@@ -656,7 +656,7 @@ README.md
 | 3 | `ai_query` structured output | `responseFormat` is **rejected** by Claude 5.x. Use a JSON-only prompt and `from_json` (§9.1); verified on `databricks-claude-sonnet-5-5` ✅ |
 | 4 | Lakebase Autoscaling synced tables | Continuous sync from a liquid-clustered CDF Delta table, inserts and updates via MERGE, **about 13 s** to Postgres ✅. The synced table can sit in a standard UC catalog ✅. There are no deletes in the design (decided) |
 | 5 | App on-behalf-of-user | An app requesting `dashboards.genie` and `sql` got both as **effective** user scopes ✅ |
-| 6 | UC catalog | Use the existing `hls_jagjit_lb_playground_catalog` (decided); no catalog creation. Schemas are isolated by `schema_prefix` (§3) |
+| 6 | UC catalog | Use the existing `<catalog>` (decided); no catalog creation. Schemas are isolated by `schema_prefix` (§3) |
 | 7 | PHI masking | No ABAC and no UC column masks (decided); PHI is de-identified physically (§11.2) |
 | 8 | Bundle resources | `genie_spaces`, `postgres_projects/branches/endpoints`; app resources `genie_space` and `postgres` ✅. Postgres databases and autoscaling synced tables are created by SDK in `ed_setup` |
 | 9 | Endpoint | `databricks-claude-sonnet-5-5` is ready ✅ |

@@ -10,7 +10,7 @@ LOGICAL_SCHEMAS = ("bronze", "silver", "gold", "ref", "sim", "serving")
 
 @dataclass(frozen=True)
 class Config:
-    catalog: str = "hls_jagjit_lb_playground_catalog"
+    catalog: str = "main"  # local default only; every bundle target must set var.catalog
     schema_prefix: str = "ed_"
     facility_count: int = 50
     backfill_days: int = 14

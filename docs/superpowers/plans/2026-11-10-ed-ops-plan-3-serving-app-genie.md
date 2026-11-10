@@ -30,7 +30,7 @@
 
 - **Everything in the Plan 1 and Plan 2 Global Constraints still holds**, in particular:
   - naive-UTC datetimes;
-  - the existing catalog `hls_jagjit_lb_playground_catalog`, never created or dropped;
+  - the existing catalog `<catalog>`, never created or dropped;
   - `{schema_prefix}{logical}` schemas;
   - regular `ed_`-prefixed tags;
   - no deletes;
@@ -156,14 +156,14 @@ def test_create_view_sql_and_ordering():
     cfg = Config()
     cat = load_catalog_def()
     sql = generate.create_view_sql(cfg, cat.view("gold", "visit_facts"))
-    assert sql.startswith("CREATE OR REPLACE VIEW hls_jagjit_lb_playground_catalog.ed_gold.visit_facts (")
-    assert "d2p_min COMMENT" in sql and "FROM hls_jagjit_lb_playground_catalog.ed_silver.ed_visits v" in sql
+    assert sql.startswith("CREATE OR REPLACE VIEW <catalog>.ed_gold.visit_facts (")
+    assert "d2p_min COMMENT" in sql and "FROM <catalog>.ed_silver.ed_visits v" in sql
     assert "{" not in sql
     stmts = generate.ddl_statements(cfg, cat)
     last_table = max(i for i, s in enumerate(stmts) if s.startswith("CREATE TABLE"))
     view_at = next(i for i, s in enumerate(stmts) if s.startswith("CREATE OR REPLACE VIEW"))
     assert view_at > last_table
-    assert any(s.startswith("ALTER VIEW hls_jagjit_lb_playground_catalog.ed_gold.visit_facts SET TAGS ('ed_layer' = 'gold'") for s in stmts)
+    assert any(s.startswith("ALTER VIEW <catalog>.ed_gold.visit_facts SET TAGS ('ed_layer' = 'gold'") for s in stmts)
 
 
 def test_view_select_matches_declared_columns(spark):
@@ -395,16 +395,16 @@ def test_names():
 def test_synced_table_specs():
     specs = dict(lakebase.synced_table_specs(CFG))
     assert set(specs) == {
-        f"hls_jagjit_lb_playground_catalog.ed_serving.{n}"
+        f"<catalog>.ed_serving.{n}"
         for n in ("facility_current", "facility_snapshot_5min", "ed_board_current", "facility_narrative", "network_narrative", "facility")
     }
-    cur = specs["hls_jagjit_lb_playground_catalog.ed_serving.facility_current"]
-    assert cur["source_table_full_name"] == "hls_jagjit_lb_playground_catalog.ed_gold.facility_current"
+    cur = specs["<catalog>.ed_serving.facility_current"]
+    assert cur["source_table_full_name"] == "<catalog>.ed_gold.facility_current"
     assert cur["primary_key_columns"] == ["facility_id"] and cur["scheduling_policy"] == "CONTINUOUS"
     assert cur["branch"] == "projects/ed-ops-dev/branches/production" and cur["postgres_database"] == "databricks_postgres"
-    assert cur["new_pipeline_spec"] == {"storage_catalog": "hls_jagjit_lb_playground_catalog", "storage_schema": "ed_serving"}
-    assert specs["hls_jagjit_lb_playground_catalog.ed_serving.facility_snapshot_5min"]["primary_key_columns"] == ["facility_id", "snapshot_ts"]
-    assert specs["hls_jagjit_lb_playground_catalog.ed_serving.facility"]["scheduling_policy"] == "SNAPSHOT"
+    assert cur["new_pipeline_spec"] == {"storage_catalog": "<catalog>", "storage_schema": "ed_serving"}
+    assert specs["<catalog>.ed_serving.facility_snapshot_5min"]["primary_key_columns"] == ["facility_id", "snapshot_ts"]
+    assert specs["<catalog>.ed_serving.facility"]["scheduling_policy"] == "SNAPSHOT"
 
 
 def test_grant_statements_quote_the_role():
@@ -431,7 +431,7 @@ class FakePostgres:
 
 
 def test_ensure_synced_tables_is_idempotent():
-    already = "hls_jagjit_lb_playground_catalog.ed_serving.facility_current"
+    already = "<catalog>.ed_serving.facility_current"
     w = SimpleNamespace(postgres=FakePostgres({already}))
     created = lakebase.ensure_synced_tables(w, CFG)
     assert already not in created and len(created) == 5
@@ -739,7 +739,7 @@ def test_serialized_space_shape():
     s = build_serialized_space(CFG, load_space_doc())
     assert s["version"] == 2
     ids = [t["identifier"] for t in s["data_sources"]["tables"]]
-    assert ids == sorted(ids) and "hls_jagjit_lb_playground_catalog.ed_gold.visit_facts" in ids
+    assert ids == sorted(ids) and "<catalog>.ed_gold.visit_facts" in ids
     cat = load_catalog_def()
     known = {CFG.table(t.schema, t.name) for t in cat.tables} | {CFG.table(v.schema, v.name) for v in cat.views}
     assert set(ids) <= known
@@ -752,7 +752,7 @@ def test_serialized_space_shape():
         assert re.fullmatch(r"[0-9a-f]{32}", e["id"])
     for e in examples:
         sql = "".join(e["sql"])
-        assert "{" not in sql and "hls_jagjit_lb_playground_catalog.ed_" in sql
+        assert "{" not in sql and "<catalog>.ed_" in sql
     assert len({e["id"] for e in examples}) == 10
     assert build_serialized_space(CFG, load_space_doc()) == s  # deterministic ids
 
@@ -2737,7 +2737,7 @@ def test_serving_resources_and_customer_target():
     assert "app/frontend/dist/**" in bundle["sync"]["include"]
     customer = bundle["targets"]["customer"]
     assert customer["mode"] == "production" and customer["run_as"] == {"service_principal_name": "${var.run_as_service_principal}"}
-    assert bundle["targets"]["dev"]["variables"]["warehouse_id"] == "abef38163a09f120"
+    assert bundle["targets"]["dev"]["variables"]["warehouse_id"] == "<warehouse-id>"
     assert (ROOT / "scripts" / "deploy.sh").stat().st_mode & 0o111
 ```
 
@@ -2923,7 +2923,7 @@ sync:
   include:
     - app/frontend/dist/**
 ```
-- under `targets.dev.variables`, add `warehouse_id: abef38163a09f120`;
+- under `targets.dev.variables`, add `warehouse_id: <warehouse-id>`;
 - append this target under `targets:`:
 ```yaml
   customer:
@@ -2940,7 +2940,7 @@ sync:
 ```bash
 #!/usr/bin/env bash
 # Build the React frontend, then deploy the bundle (the dist/ folder is git-ignored but synced via sync.include).
-# Usage: scripts/deploy.sh -t dev -p fevm-playground [--var name=value ...]
+# Usage: scripts/deploy.sh -t dev -p <profile> [--var name=value ...]
 set -euo pipefail
 cd "$(dirname "$0")/.."
 npm --prefix app/frontend ci
@@ -2952,7 +2952,7 @@ databricks bundle deploy "$@"
 ```python
 #!/usr/bin/env python3
 """Delete the Lakebase synced tables and the Genie space (run before dropping the schemas).
-Usage: scripts/teardown_serving.py --prefix ed_ --catalog <catalog> --genie-title "<title>" [--profile fevm-playground]"""
+Usage: scripts/teardown_serving.py --prefix ed_ --catalog <catalog> --genie-title "<title>" [--profile <profile>]"""
 
 import argparse
 import json
@@ -2970,7 +2970,7 @@ def main() -> None:
     p.add_argument("--prefix", required=True)
     p.add_argument("--catalog", required=True)
     p.add_argument("--genie-title", required=True)
-    p.add_argument("--profile", default="fevm-playground")
+    p.add_argument("--profile", default="<profile>")
     a = p.parse_args()
     for t in TABLES:
         name = f"synced_tables/{a.catalog}.{a.prefix}serving.{t}"
@@ -2996,7 +2996,7 @@ Replace the body of `scripts/teardown.sh` with:
 set -euo pipefail
 PREFIX="${1:?usage: scripts/teardown.sh <schema_prefix> --yes [catalog] [genie title]}"
 [[ "${2:-}" == "--yes" ]] || { echo "refusing to drop ${PREFIX}* schemas without --yes" >&2; exit 2; }
-CATALOG="${3:-hls_jagjit_lb_playground_catalog}"
+CATALOG="${3:-<catalog>}"
 TITLE="${4:-ED Ops Crowding Assistant (dev)}"
 cd "$(dirname "$0")/.."
 python3 scripts/teardown_serving.py --prefix "$PREFIX" --catalog "$CATALOG" --genie-title "$TITLE"
@@ -3012,7 +3012,7 @@ Run: `chmod +x scripts/deploy.sh scripts/teardown_serving.py`
 Run: `scripts/pytest.sh -v`
 Expected: the whole suite passes.
 
-Run: `databricks bundle validate -t dev -p fevm-playground`
+Run: `databricks bundle validate -t dev -p <profile>`
 Expected: `Validation OK!`. If a field name is rejected (for example under `postgres_projects` or the app's `postgres` resource), check it against `databricks bundle schema` and use the name that release accepts.
 
 - [ ] **Step 7: Commit**
@@ -3043,13 +3043,13 @@ Each check gives a command and its expected result. If a check fails, reproduce 
 - [ ] **Step 1: Pause streaming, deploy, run setup, start the app, resume streaming**
 
 ```bash
-databricks bundle deploy -t dev -p fevm-playground --var streaming_pause_status=PAUSED
-JOB=$(databricks bundle summary -t dev -p fevm-playground -o json | python3 -c "import json,sys;print(json.load(sys.stdin)['resources']['jobs']['ed_streaming']['id'])")
-databricks jobs cancel-all-runs --job-id $JOB -p fevm-playground
-scripts/deploy.sh -t dev -p fevm-playground --var streaming_pause_status=PAUSED
-databricks bundle run ed_setup -t dev -p fevm-playground
-databricks bundle run ed_ops -t dev -p fevm-playground
-scripts/deploy.sh -t dev -p fevm-playground --var streaming_pause_status=UNPAUSED
+databricks bundle deploy -t dev -p <profile> --var streaming_pause_status=PAUSED
+JOB=$(databricks bundle summary -t dev -p <profile> -o json | python3 -c "import json,sys;print(json.load(sys.stdin)['resources']['jobs']['ed_streaming']['id'])")
+databricks jobs cancel-all-runs --job-id $JOB -p <profile>
+scripts/deploy.sh -t dev -p <profile> --var streaming_pause_status=PAUSED
+databricks bundle run ed_setup -t dev -p <profile>
+databricks bundle run ed_ops -t dev -p <profile>
+scripts/deploy.sh -t dev -p <profile> --var streaming_pause_status=UNPAUSED
 ```
 Expected:
 - The first `deploy.sh` creates the Lakebase project `ed-ops-dev`, the app, and the `ed_genie_benchmarks` job.
@@ -3061,8 +3061,8 @@ Expected:
 The curl checks need a short-lived OAuth token from `databricks auth token`. **Ask the user before minting it.** If they decline, open the app URL in a browser and check the same endpoints there; the expected results are the same.
 
 ```bash
-URL=$(databricks apps get $(databricks bundle summary -t dev -p fevm-playground -o json | python3 -c "import json,sys;print(json.load(sys.stdin)['resources']['apps']['ed_ops']['name'])") -p fevm-playground -o json | python3 -c "import json,sys;print(json.load(sys.stdin)['url'])")
-TOKEN=$(databricks auth token -p fevm-playground | python3 -c "import json,sys;print(json.load(sys.stdin)['access_token'])")
+URL=$(databricks apps get $(databricks bundle summary -t dev -p <profile> -o json | python3 -c "import json,sys;print(json.load(sys.stdin)['resources']['apps']['ed_ops']['name'])") -p <profile> -o json | python3 -c "import json,sys;print(json.load(sys.stdin)['url'])")
+TOKEN=$(databricks auth token -p <profile> | python3 -c "import json,sys;print(json.load(sys.stdin)['access_token'])")
 for p in /api/health /api/network/summary /api/facilities /api/heatmap "/api/facilities/FAC001" "/api/facilities/FAC001/history?hours=24" "/api/facilities/FAC001/board"; do
   echo "== $p"; curl -s -H "Authorization: Bearer $TOKEN" "$URL$p" | python3 -c "import json,sys;d=json.load(sys.stdin);print({k:(len(v) if isinstance(v,list) else v) for k,v in d.items()} if isinstance(d,dict) else d)" | cut -c1-300
 done
@@ -3082,7 +3082,7 @@ Expected:
 R=$(curl -s -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"question":"Which facilities are crowded right now?"}' "$URL/api/genie/messages"); echo "$R"
 C=$(echo "$R" | python3 -c "import json,sys;print(json.load(sys.stdin)['conversation_id'])"); M=$(echo "$R" | python3 -c "import json,sys;print(json.load(sys.stdin)['message_id'])")
 for i in $(seq 1 30); do A=$(curl -s -H "Authorization: Bearer $TOKEN" "$URL/api/genie/conversations/$C/messages/$M"); echo "$A" | python3 -c "import json,sys;d=json.load(sys.stdin);print(d['status'], len(d['rows']), (d['sql'] or '')[:120])"; echo "$A" | grep -q '"done":true' && break; sleep 3; done
-databricks bundle run ed_genie_benchmarks -t dev -p fevm-playground
+databricks bundle run ed_genie_benchmarks -t dev -p <profile>
 ```
 Expected:
 - The Genie answer reaches `COMPLETED`, with SQL over `ed_gold.facility_current` and rows for the Crowded facilities.
@@ -3144,29 +3144,29 @@ The design spec is `docs/superpowers/specs/2026-11-09-ed-crowding-design.md`.
 ```markdown
 # Runbook
 
-Workspace: dev = https://fevm-hls-jagjit-lb-playground.cloud.databricks.com (profile fevm-playground).
-Catalog: hls_jagjit_lb_playground_catalog (existing; never created or dropped). Schemas: ed_bronze, ed_silver, ed_gold,
+Workspace: dev = https://<workspace-host> (profile <profile>).
+Catalog: <catalog> (existing; never created or dropped). Schemas: ed_bronze, ed_silver, ed_gold,
 ed_ref, ed_sim, ed_serving. Tag keys are prefixed ed_.
 
 ## Start / stop live streaming (the classic cluster bills while running)
-    scripts/deploy.sh -t dev -p fevm-playground --var streaming_pause_status=UNPAUSED
-    scripts/deploy.sh -t dev -p fevm-playground --var streaming_pause_status=PAUSED
-    JOB=$(databricks bundle summary -t dev -p fevm-playground -o json | python3 -c "import json,sys;print(json.load(sys.stdin)['resources']['jobs']['ed_streaming']['id'])")
-    databricks jobs cancel-all-runs --job-id $JOB -p fevm-playground      # pausing alone leaves the active run up
+    scripts/deploy.sh -t dev -p <profile> --var streaming_pause_status=UNPAUSED
+    scripts/deploy.sh -t dev -p <profile> --var streaming_pause_status=PAUSED
+    JOB=$(databricks bundle summary -t dev -p <profile> -o json | python3 -c "import json,sys;print(json.load(sys.stdin)['resources']['jobs']['ed_streaming']['id'])")
+    databricks jobs cancel-all-runs --job-id $JOB -p <profile>      # pausing alone leaves the active run up
 
 ## Re-run setup (safe; pause streaming first - AI/driver/narrative tasks refuse while it runs)
-    databricks bundle run ed_setup -t dev -p fevm-playground
-    databricks bundle run ed_setup --only genie_space -t dev -p fevm-playground    # refresh Genie instructions only
+    databricks bundle run ed_setup -t dev -p <profile>
+    databricks bundle run ed_setup --only genie_space -t dev -p <profile>    # refresh Genie instructions only
 
 ## App
-    databricks bundle run ed_ops -t dev -p fevm-playground                 # (re)deploy and start the app
-    databricks apps logs <app name> -p fevm-playground --tail-lines 100
+    databricks bundle run ed_ops -t dev -p <profile>                 # (re)deploy and start the app
+    databricks apps logs <app name> -p <profile> --tail-lines 100
 
 ## Health checks
-    scripts/run_sql.py "SELECT max(computed_at), current_timestamp() FROM hls_jagjit_lb_playground_catalog.ed_gold.facility_current"
-    scripts/run_sql.py "SELECT ai_status, count(*) FROM hls_jagjit_lb_playground_catalog.ed_silver.triage_notes GROUP BY 1"
-    databricks bundle run ed_validate -t dev -p fevm-playground            # end-to-end, cleans up after itself
-    databricks bundle run ed_genie_benchmarks -t dev -p fevm-playground    # Genie accuracy (>= 60% to pass)
+    scripts/run_sql.py "SELECT max(computed_at), current_timestamp() FROM <catalog>.ed_gold.facility_current"
+    scripts/run_sql.py "SELECT ai_status, count(*) FROM <catalog>.ed_silver.triage_notes GROUP BY 1"
+    databricks bundle run ed_validate -t dev -p <profile>            # end-to-end, cleans up after itself
+    databricks bundle run ed_genie_benchmarks -t dev -p <profile>    # Genie accuracy (>= 60% to pass)
 
 ## Costs (all knobs are bundle variables)
 - ed_streaming: one on-demand Photon r7gd.2xlarge driver + 1 worker, always on while UNPAUSED.
@@ -3175,12 +3175,12 @@ ed_ref, ed_sim, ed_serving. Tag keys are prefixed ed_.
 - Volume: tune facility_count, backfill_days, ai_backfill_days, tick_seconds.
 
 ## Reset streams (fresh checkpoints, keep data; note bronze re-ingests landing files)
-    scripts/deploy.sh -t dev -p fevm-playground --var checkpoint_version=2 --var streaming_pause_status=UNPAUSED
+    scripts/deploy.sh -t dev -p <profile> --var checkpoint_version=2 --var streaming_pause_status=UNPAUSED
 
 ## Tear down
-    scripts/deploy.sh -t dev -p fevm-playground --var streaming_pause_status=PAUSED   # then cancel-all-runs as above
+    scripts/deploy.sh -t dev -p <profile> --var streaming_pause_status=PAUSED   # then cancel-all-runs as above
     scripts/teardown.sh ed_ --yes                      # synced tables, Genie space, then the ed_* schemas
-    databricks bundle destroy -t dev -p fevm-playground   # jobs, app, Lakebase project
+    databricks bundle destroy -t dev -p <profile>   # jobs, app, Lakebase project
 ```
 
 ```bash

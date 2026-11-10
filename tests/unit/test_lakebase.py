@@ -16,16 +16,16 @@ def test_names():
 def test_synced_table_specs():
     specs = dict(lakebase.synced_table_specs(CFG))
     assert set(specs) == {
-        f"hls_jagjit_lb_playground_catalog.ed_serving.{n}"
+        f"main.ed_serving.{n}"
         for n in ("facility_current", "facility_snapshot_5min", "ed_board_current", "facility_narrative", "network_narrative", "facility")
     }
-    cur = specs["hls_jagjit_lb_playground_catalog.ed_serving.facility_current"]
-    assert cur["source_table_full_name"] == "hls_jagjit_lb_playground_catalog.ed_gold.facility_current"
+    cur = specs["main.ed_serving.facility_current"]
+    assert cur["source_table_full_name"] == "main.ed_gold.facility_current"
     assert cur["primary_key_columns"] == ["facility_id"] and cur["scheduling_policy"] == "CONTINUOUS"
     assert cur["branch"] == "projects/ed-ops-dev/branches/production" and cur["postgres_database"] == "databricks_postgres"
-    assert cur["new_pipeline_spec"] == {"storage_catalog": "hls_jagjit_lb_playground_catalog", "storage_schema": "ed_serving"}
-    assert specs["hls_jagjit_lb_playground_catalog.ed_serving.facility_snapshot_5min"]["primary_key_columns"] == ["facility_id", "snapshot_ts"]
-    assert specs["hls_jagjit_lb_playground_catalog.ed_serving.facility"]["scheduling_policy"] == "SNAPSHOT"
+    assert cur["new_pipeline_spec"] == {"storage_catalog": "main", "storage_schema": "ed_serving"}
+    assert specs["main.ed_serving.facility_snapshot_5min"]["primary_key_columns"] == ["facility_id", "snapshot_ts"]
+    assert specs["main.ed_serving.facility"]["scheduling_policy"] == "SNAPSHOT"
 
 
 def test_grant_statements_quote_the_role():
@@ -52,7 +52,7 @@ class FakePostgres:
 
 
 def test_ensure_synced_tables_is_idempotent():
-    already = "hls_jagjit_lb_playground_catalog.ed_serving.facility_current"
+    already = "main.ed_serving.facility_current"
     w = SimpleNamespace(postgres=FakePostgres({already}))
     created = lakebase.ensure_synced_tables(w, CFG)
     assert already not in created and len(created) == 5

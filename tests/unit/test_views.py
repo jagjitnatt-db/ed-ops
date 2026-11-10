@@ -25,14 +25,14 @@ def test_create_view_sql_and_ordering():
     cfg = Config()
     cat = load_catalog_def()
     sql = generate.create_view_sql(cfg, cat.view("gold", "visit_facts"))
-    assert sql.startswith("CREATE OR REPLACE VIEW hls_jagjit_lb_playground_catalog.ed_gold.visit_facts (")
-    assert "d2p_min COMMENT" in sql and "FROM hls_jagjit_lb_playground_catalog.ed_silver.ed_visits v" in sql
+    assert sql.startswith("CREATE OR REPLACE VIEW main.ed_gold.visit_facts (")
+    assert "d2p_min COMMENT" in sql and "FROM main.ed_silver.ed_visits v" in sql
     assert "{" not in sql
     stmts = generate.ddl_statements(cfg, cat)
     last_table = max(i for i, s in enumerate(stmts) if s.startswith("CREATE TABLE"))
     view_at = next(i for i, s in enumerate(stmts) if s.startswith("CREATE OR REPLACE VIEW"))
     assert view_at > last_table
-    assert any(s.startswith("ALTER VIEW hls_jagjit_lb_playground_catalog.ed_gold.visit_facts SET TAGS ('ed_layer' = 'gold'") for s in stmts)
+    assert any(s.startswith("ALTER VIEW main.ed_gold.visit_facts SET TAGS ('ed_layer' = 'gold'") for s in stmts)
 
 
 def test_view_select_matches_declared_columns(spark):

@@ -16,8 +16,9 @@ artifacts:
 
 variables:
   catalog:
-    description: Existing Unity Catalog catalog. The bundle never creates or drops a catalog.
-    default: hls_jagjit_lb_playground_catalog
+    description: >-
+      Existing Unity Catalog catalog (required; the bundle never creates or drops a catalog). Set it per environment in
+      .databricks/bundle/<target>/variable-overrides.json (see variable-overrides.example.json) or with --var catalog=...
   schema_prefix:
     description: Prefix of every schema the solution creates ({prefix}bronze, {prefix}silver, ...).
     default: ed_
@@ -58,8 +59,7 @@ variables:
     description: Minutes between AI retry sweeps.
     default: "15"
   warehouse_id:
-    description: SQL warehouse for Genie and the app (required for every target).
-    default: ""
+    description: SQL warehouse id for Genie and the app (required; set it like catalog).
   lakebase_project_id:
     description: Lakebase Autoscaling project id (lowercase letters, digits, hyphens).
     default: ed-ops-${bundle.target}
@@ -95,14 +95,11 @@ targets:
   dev:
     mode: development
     default: true
-    workspace:
-      host: https://fevm-hls-jagjit-lb-playground.cloud.databricks.com
     variables:
       secret_scope: ed_ops_${workspace.current_user.short_name}
-      warehouse_id: abef38163a09f120
   customer:
-    # Template for the customer workspace: authenticate with a CLI profile for that workspace and pass
-    # --var catalog=<existing catalog> --var warehouse_id=<warehouse> --var run_as_service_principal=<application id>.
+    # Production template: deploy with -p <profile for the workspace> and set catalog, warehouse_id and
+    # run_as_service_principal in .databricks/bundle/customer/variable-overrides.json (or pass them with --var).
     mode: production
     run_as:
       service_principal_name: ${var.run_as_service_principal}

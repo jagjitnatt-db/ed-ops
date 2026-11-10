@@ -5,8 +5,8 @@ from ed_ops.config import Config, parse_config
 
 def test_schema_and_table_names_use_prefix():
     cfg = Config()
-    assert cfg.schema("silver") == "hls_jagjit_lb_playground_catalog.ed_silver"
-    assert cfg.table("gold", "facility_current") == "hls_jagjit_lb_playground_catalog.ed_gold.facility_current"
+    assert cfg.schema("silver") == "main.ed_silver"
+    assert cfg.table("gold", "facility_current") == "main.ed_gold.facility_current"
 
 
 def test_unknown_logical_schema_rejected():
@@ -16,9 +16,9 @@ def test_unknown_logical_schema_rejected():
 
 def test_paths():
     cfg = Config(schema_prefix="ed_smoke_", checkpoint_version=3)
-    assert cfg.landing_path == "/Volumes/hls_jagjit_lb_playground_catalog/ed_smoke_bronze/landing/events"
+    assert cfg.landing_path == "/Volumes/main/ed_smoke_bronze/landing/events"
     assert cfg.checkpoint("gold_metrics") == (
-        "/Volumes/hls_jagjit_lb_playground_catalog/ed_smoke_ref/checkpoints/gold_metrics/v3"
+        "/Volumes/main/ed_smoke_ref/checkpoints/gold_metrics/v3"
     )
 
 

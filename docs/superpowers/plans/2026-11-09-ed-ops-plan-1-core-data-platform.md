@@ -30,8 +30,8 @@ Plan 1 creates the `silver.triage_notes` table empty so gold can already left-jo
   - Local Spark is the Homebrew install at `/opt/homebrew/Cellar/apache-spark/4.1.2/libexec` with Java 17 at `/opt/homebrew/opt/openjdk@17`. **Never `pip install pyspark`.**
   - Delta is **not** available locally (Maven Central is blocked), so MERGE statements are tested as SQL strings locally and exercised on the workspace in Task 16.
 - **Workspace and catalog:**
-  - Dev workspace `https://fevm-hls-jagjit-lb-playground.cloud.databricks.com`, CLI profile `fevm-playground`.
-  - Catalog `hls_jagjit_lb_playground_catalog` (exists; **never create or drop a catalog**).
+  - Dev workspace `https://<workspace-host>`, CLI profile `<profile>`.
+  - Catalog `<catalog>` (exists; **never create or drop a catalog**).
   - Schemas are `{schema_prefix}{logical}` with `schema_prefix` default `ed_`. Logical schemas: `bronze`, `silver`, `gold`, `ref`, `sim`, `serving`.
 - **Datetimes:**
   - **All Python datetimes are naive UTC.** Spark session time zone is `UTC`.
@@ -260,8 +260,8 @@ from ed_ops.config import Config, parse_config
 
 def test_schema_and_table_names_use_prefix():
     cfg = Config()
-    assert cfg.schema("silver") == "hls_jagjit_lb_playground_catalog.ed_silver"
-    assert cfg.table("gold", "facility_current") == "hls_jagjit_lb_playground_catalog.ed_gold.facility_current"
+    assert cfg.schema("silver") == "<catalog>.ed_silver"
+    assert cfg.table("gold", "facility_current") == "<catalog>.ed_gold.facility_current"
 
 
 def test_unknown_logical_schema_rejected():
@@ -271,9 +271,9 @@ def test_unknown_logical_schema_rejected():
 
 def test_paths():
     cfg = Config(schema_prefix="ed_smoke_", checkpoint_version=3)
-    assert cfg.landing_path == "/Volumes/hls_jagjit_lb_playground_catalog/ed_smoke_bronze/landing/events"
+    assert cfg.landing_path == "/Volumes/<catalog>/ed_smoke_bronze/landing/events"
     assert cfg.checkpoint("gold_metrics") == (
-        "/Volumes/hls_jagjit_lb_playground_catalog/ed_smoke_ref/checkpoints/gold_metrics/v3"
+        "/Volumes/<catalog>/ed_smoke_ref/checkpoints/gold_metrics/v3"
     )
 
 
@@ -347,7 +347,7 @@ LOGICAL_SCHEMAS = ("bronze", "silver", "gold", "ref", "sim", "serving")
 
 @dataclass(frozen=True)
 class Config:
-    catalog: str = "hls_jagjit_lb_playground_catalog"
+    catalog: str = "<catalog>"
     schema_prefix: str = "ed_"
     facility_count: int = 50
     backfill_days: int = 14
@@ -888,7 +888,7 @@ def test_create_table_sql_has_pk_clustering_cdf_and_escaped_comments():
     cfg = Config()
     t = parse_catalog_def(_minimal_doc()).table("gold", "t")
     sql = generate.create_table_sql(cfg, t)
-    assert sql.startswith("CREATE TABLE IF NOT EXISTS hls_jagjit_lb_playground_catalog.ed_gold.t (")
+    assert sql.startswith("CREATE TABLE IF NOT EXISTS <catalog>.ed_gold.t (")
     assert "id STRING NOT NULL COMMENT 'Key.'" in sql
     assert "v INT COMMENT 'It\\'s a value.'" in sql
     assert "CONSTRAINT t_pk PRIMARY KEY (id)" in sql
@@ -901,13 +901,13 @@ def test_tag_and_comment_statements():
     t = parse_catalog_def(_minimal_doc()).table("gold", "t")
     tags = generate.tag_sqls(cfg, t)
     assert tags[0] == (
-        "ALTER TABLE hls_jagjit_lb_playground_catalog.ed_gold.t SET TAGS "
+        "ALTER TABLE <catalog>.ed_gold.t SET TAGS "
         "('layer' = 'gold', 'domain' = 'ed', 'data_origin' = 'synthetic', 'data_classification' = 'internal', 'contains_phi' = 'false')"
     )
-    assert tags[1] == "ALTER TABLE hls_jagjit_lb_playground_catalog.ed_gold.t ALTER COLUMN v SET TAGS ('unit' = 'count')"
+    assert tags[1] == "ALTER TABLE <catalog>.ed_gold.t ALTER COLUMN v SET TAGS ('unit' = 'count')"
     comments = generate.comment_sqls(cfg, t)
-    assert comments[0] == "COMMENT ON TABLE hls_jagjit_lb_playground_catalog.ed_gold.t IS 'A table.'"
-    assert comments[1] == "ALTER TABLE hls_jagjit_lb_playground_catalog.ed_gold.t ALTER COLUMN id COMMENT 'Key.'"
+    assert comments[0] == "COMMENT ON TABLE <catalog>.ed_gold.t IS 'A table.'"
+    assert comments[1] == "ALTER TABLE <catalog>.ed_gold.t ALTER COLUMN id COMMENT 'Key.'"
 
 
 def test_ddl_statements_order_schemas_volumes_tables():
@@ -5139,7 +5139,7 @@ artifacts:
 variables:
   catalog:
     description: Existing Unity Catalog catalog. The bundle never creates or drops a catalog.
-    default: hls_jagjit_lb_playground_catalog
+    default: <catalog>
   schema_prefix:
     description: Prefix of every schema the solution creates ({prefix}bronze, {prefix}silver, ...).
     default: ed_
@@ -5176,7 +5176,7 @@ targets:
     mode: development
     default: true
     workspace:
-      host: https://fevm-hls-jagjit-lb-playground.cloud.databricks.com
+      host: https://<workspace-host>
     presets:
       trigger_pause_status: UNPAUSED
     variables:
@@ -5277,7 +5277,7 @@ resources:
 """Run SQL on a Databricks SQL warehouse through the Databricks CLI (dev tooling for smoke checks).
 
 Usage: scripts/run_sql.py "SELECT 1" ["SELECT 2" ...]
-Env:   DATABRICKS_PROFILE (default fevm-playground), WAREHOUSE_ID (default abef38163a09f120)
+Env:   DATABRICKS_PROFILE (default <profile>), WAREHOUSE_ID (default <warehouse-id>)
 """
 
 import json
@@ -5286,8 +5286,8 @@ import subprocess
 import sys
 import time
 
-PROFILE = os.environ.get("DATABRICKS_PROFILE", "fevm-playground")
-WAREHOUSE = os.environ.get("WAREHOUSE_ID", "abef38163a09f120")
+PROFILE = os.environ.get("DATABRICKS_PROFILE", "<profile>")
+WAREHOUSE = os.environ.get("WAREHOUSE_ID", "<warehouse-id>")
 
 
 def _api(method: str, path: str, body: dict | None = None) -> dict:
@@ -5323,7 +5323,7 @@ if __name__ == "__main__":
 set -euo pipefail
 PREFIX="${1:?usage: scripts/teardown.sh <schema_prefix> --yes [catalog]}"
 [[ "${2:-}" == "--yes" ]] || { echo "refusing to drop ${PREFIX}* schemas without --yes" >&2; exit 2; }
-CATALOG="${3:-hls_jagjit_lb_playground_catalog}"
+CATALOG="${3:-<catalog>}"
 cd "$(dirname "$0")/.."
 for logical in bronze silver gold ref sim serving; do
   python3 scripts/run_sql.py "DROP SCHEMA IF EXISTS ${CATALOG}.${PREFIX}${logical} CASCADE"
@@ -5337,16 +5337,16 @@ Run: `chmod +x scripts/run_sql.py scripts/teardown.sh`
 Run: `scripts/pytest.sh -v`
 Expected: every test passes, including `test_cli.py` (2 tests).
 
-Run: `databricks bundle validate -t dev -p fevm-playground`
+Run: `databricks bundle validate -t dev -p <profile>`
 Expected: `Validation OK!`. If it reports an unknown field under `environments[].spec`, check the field name with `databricks bundle schema | python3 -c "import json,sys; d=json.load(sys.stdin); print([k for k in d['$defs'] if 'Environment' in k])"` and use whichever environment-version field that release supports.
 
 Run:
 ```bash
-databricks bundle validate -t dev -p fevm-playground -o json | python3 -c "import json,sys; j=json.load(sys.stdin)['resources']['jobs']; print(j['ed_streaming']['continuous'], len(j['ed_streaming']['tasks']), j['ed_setup']['tasks'][0]['python_wheel_task']['named_parameters'])"
-databricks bundle validate -t dev -p fevm-playground --var streaming_pause_status=UNPAUSED -o json | python3 -c "import json,sys; print(json.load(sys.stdin)['resources']['jobs']['ed_streaming']['continuous'])"
+databricks bundle validate -t dev -p <profile> -o json | python3 -c "import json,sys; j=json.load(sys.stdin)['resources']['jobs']; print(j['ed_streaming']['continuous'], len(j['ed_streaming']['tasks']), j['ed_setup']['tasks'][0]['python_wheel_task']['named_parameters'])"
+databricks bundle validate -t dev -p <profile> --var streaming_pause_status=UNPAUSED -o json | python3 -c "import json,sys; print(json.load(sys.stdin)['resources']['jobs']['ed_streaming']['continuous'])"
 ```
 Expected:
-- The first command prints `{'pause_status': 'PAUSED'}`, then `4`, then the named parameters with `catalog: hls_jagjit_lb_playground_catalog` and `secret_scope: ed_ops_<your short name>`.
+- The first command prints `{'pause_status': 'PAUSED'}`, then `4`, then the named parameters with `catalog: <catalog>` and `secret_scope: ed_ops_<your short name>`.
 - The second command prints `{'pause_status': 'UNPAUSED'}`.
 
 If development mode forces `PAUSED` in the second case, remove the `presets` block and start the job with `databricks bundle run ed_streaming` in Task 17 instead.
@@ -5375,15 +5375,15 @@ Each check below is a command with an expected result. If a check fails, fix the
 
 ```bash
 SMOKE="--var schema_prefix=ed_smoke_ --var facility_count=5 --var backfill_days=1 --var checkpoint_version=1"
-databricks bundle deploy -t dev -p fevm-playground $SMOKE
-databricks bundle run ed_setup -t dev -p fevm-playground $SMOKE
+databricks bundle deploy -t dev -p <profile> $SMOKE
+databricks bundle run ed_setup -t dev -p <profile> $SMOKE
 ```
 Expected: all five `ed_setup` tasks succeed (about 10–20 minutes on serverless).
 
 - [ ] **Step 2: Smoke checks after setup**
 
 ```bash
-C=hls_jagjit_lb_playground_catalog
+C=<catalog>
 scripts/run_sql.py \
   "SELECT count(*) FROM $C.ed_smoke_bronze.ed_events" \
   "SELECT reason_code, count(*) FROM $C.ed_smoke_silver.ed_events_quarantine GROUP BY 1 ORDER BY 1" \
@@ -5405,7 +5405,7 @@ Expected:
 - [ ] **Step 3: Smoke streaming for 10 minutes**
 
 ```bash
-databricks bundle deploy -t dev -p fevm-playground $SMOKE --var streaming_pause_status=UNPAUSED
+databricks bundle deploy -t dev -p <profile> $SMOKE --var streaming_pause_status=UNPAUSED
 ```
 Wait about 10 minutes after the job's cluster is running, then:
 ```bash
@@ -5426,7 +5426,7 @@ Expected:
 - [ ] **Step 4: Stop and tear down the smoke run**
 
 ```bash
-databricks bundle deploy -t dev -p fevm-playground $SMOKE --var streaming_pause_status=PAUSED
+databricks bundle deploy -t dev -p <profile> $SMOKE --var streaming_pause_status=PAUSED
 scripts/teardown.sh ed_smoke_ --yes
 ```
 Expected: the job shows as paused, and `scripts/run_sql.py "SHOW SCHEMAS IN $C LIKE 'ed_smoke_*'"` prints no rows.
@@ -5434,8 +5434,8 @@ Expected: the job shows as paused, and `scripts/run_sql.py "SHOW SCHEMAS IN $C L
 - [ ] **Step 5: Full deploy and setup (50 facilities, 14 days)**
 
 ```bash
-databricks bundle deploy -t dev -p fevm-playground
-databricks bundle run ed_setup -t dev -p fevm-playground
+databricks bundle deploy -t dev -p <profile>
+databricks bundle run ed_setup -t dev -p <profile>
 ```
 Expected: all tasks succeed. `backfill_generate` and `backfill_gold` take longest; the whole run takes about 30–60 minutes.
 
@@ -5459,14 +5459,14 @@ Expected:
 **If check 2 fails:** tune `VISITS_PER_BED` in `generator/facilities.py`: lower it if too many snapshots are Crowded, raise it if too few. Then start over from a clean state:
 ```bash
 scripts/teardown.sh ed_ --yes
-databricks bundle deploy -t dev -p fevm-playground
-databricks bundle run ed_setup -t dev -p fevm-playground
+databricks bundle deploy -t dev -p <profile>
+databricks bundle run ed_setup -t dev -p <profile>
 ```
 
 - [ ] **Step 7: Start live streaming and check freshness**
 
 ```bash
-databricks bundle deploy -t dev -p fevm-playground --var streaming_pause_status=UNPAUSED
+databricks bundle deploy -t dev -p <profile> --var streaming_pause_status=UNPAUSED
 ```
 Wait 15 minutes after the cluster is running, then run the Step 3 queries against the `ed_` schemas.
 Expected: the same freshness results as Step 3. In addition, about 30 minutes after `live_started_ts`, the two live-surge facilities (the first two `surge_prone` IDs) show a rising `arrivals_1h` and `gedwin_delta_1h > 0`:
@@ -5480,27 +5480,27 @@ scripts/run_sql.py "SELECT c.facility_id, c.arrivals_1h, round(c.gedwin, 2), rou
 ```markdown
 # ED Ops: core data platform runbook (Plan 1)
 
-Workspace: https://fevm-hls-jagjit-lb-playground.cloud.databricks.com (CLI profile `fevm-playground`).
-Catalog: `hls_jagjit_lb_playground_catalog` (existing; never created or dropped). Schemas: `ed_bronze`, `ed_silver`, `ed_gold`, `ed_ref`, `ed_sim`, `ed_serving`.
+Workspace: https://<workspace-host> (CLI profile `<profile>`).
+Catalog: `<catalog>` (existing; never created or dropped). Schemas: `ed_bronze`, `ed_silver`, `ed_gold`, `ed_ref`, `ed_sim`, `ed_serving`.
 
 ## Deploy and set up
-    databricks bundle deploy -t dev -p fevm-playground
-    databricks bundle run ed_setup -t dev -p fevm-playground        # ~30-60 min: DDL, reference data, 14-day backfill
+    databricks bundle deploy -t dev -p <profile>
+    databricks bundle run ed_setup -t dev -p <profile>        # ~30-60 min: DDL, reference data, 14-day backfill
 
 ## Start / stop live streaming (classic DBR 18 LTS cluster, costs money while running)
-    databricks bundle deploy -t dev -p fevm-playground --var streaming_pause_status=UNPAUSED
-    databricks bundle deploy -t dev -p fevm-playground --var streaming_pause_status=PAUSED
+    databricks bundle deploy -t dev -p <profile> --var streaming_pause_status=UNPAUSED
+    databricks bundle deploy -t dev -p <profile> --var streaming_pause_status=PAUSED
 
 ## Check freshness
-    scripts/run_sql.py "SELECT max(computed_at), current_timestamp() FROM hls_jagjit_lb_playground_catalog.ed_gold.facility_current"
+    scripts/run_sql.py "SELECT max(computed_at), current_timestamp() FROM <catalog>.ed_gold.facility_current"
 
 ## Reset streams (fresh checkpoints, keep data)
-    databricks bundle deploy -t dev -p fevm-playground --var checkpoint_version=2 --var streaming_pause_status=UNPAUSED
+    databricks bundle deploy -t dev -p <profile> --var checkpoint_version=2 --var streaming_pause_status=UNPAUSED
 
 ## Tear down (drops the ed_* schemas only)
-    databricks bundle deploy -t dev -p fevm-playground --var streaming_pause_status=PAUSED
+    databricks bundle deploy -t dev -p <profile> --var streaming_pause_status=PAUSED
     scripts/teardown.sh ed_ --yes
-    databricks bundle destroy -t dev -p fevm-playground
+    databricks bundle destroy -t dev -p <profile>
 ```
 
 ```bash

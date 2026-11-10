@@ -79,7 +79,7 @@ def test_serving_resources_and_customer_target():
     assert "app/frontend/dist/**" in bundle["sync"]["include"]
     customer = bundle["targets"]["customer"]
     assert customer["mode"] == "production" and customer["run_as"] == {"service_principal_name": "${var.run_as_service_principal}"}
-    assert bundle["targets"]["dev"]["variables"]["warehouse_id"] == "abef38163a09f120"
+    assert "warehouse_id" not in bundle["targets"]["dev"]["variables"]  # comes from variable-overrides.json
     assert (ROOT / "scripts" / "deploy.sh").stat().st_mode & 0o111
 
 

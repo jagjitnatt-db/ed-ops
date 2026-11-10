@@ -13,7 +13,7 @@ def test_serialized_space_shape():
     s = build_serialized_space(CFG, load_space_doc())
     assert s["version"] == 2
     ids = [t["identifier"] for t in s["data_sources"]["tables"]]
-    assert ids == sorted(ids) and "hls_jagjit_lb_playground_catalog.ed_gold.visit_facts" in ids
+    assert ids == sorted(ids) and "main.ed_gold.visit_facts" in ids
     cat = load_catalog_def()
     known = {CFG.table(t.schema, t.name) for t in cat.tables} | {CFG.table(v.schema, v.name) for v in cat.views}
     assert set(ids) <= known
@@ -26,7 +26,7 @@ def test_serialized_space_shape():
         assert re.fullmatch(r"[0-9a-f]{32}", e["id"])
     for e in examples:
         sql = "".join(e["sql"])
-        assert "{" not in sql and "hls_jagjit_lb_playground_catalog.ed_" in sql
+        assert "{" not in sql and "main.ed_" in sql
     assert len({e["id"] for e in examples}) == 10
     assert [e["id"] for e in examples] == sorted(e["id"] for e in examples)  # Genie rejects unsorted ids
     assert build_serialized_space(CFG, load_space_doc()) == s  # deterministic ids

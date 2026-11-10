@@ -26,7 +26,7 @@
 
 - **Everything in Plan 1's Global Constraints still holds**, including:
   - naive-UTC datetimes;
-  - the existing catalog `hls_jagjit_lb_playground_catalog`, never created or dropped;
+  - the existing catalog `<catalog>`, never created or dropped;
   - `{schema_prefix}{logical}` schemas;
   - liquid clustering on MERGE keys;
   - no deletes;
@@ -2242,7 +2242,7 @@ resources:
 Run: `scripts/pytest.sh -v`
 Expected: the whole suite passes.
 
-Run: `databricks bundle validate -t dev -p fevm-playground`
+Run: `databricks bundle validate -t dev -p <profile>`
 Expected: `Validation OK!`.
 
 - [ ] **Step 8: Commit**
@@ -2271,16 +2271,16 @@ Each check gives a command and its expected result. If a check fails, reproduce 
 - [ ] **Step 1: Pause live streaming and stop its run** (the notes, driver and narrative backfills refuse to run while it's active)
 
 ```bash
-databricks bundle deploy -t dev -p fevm-playground --var streaming_pause_status=PAUSED
-JOB=$(databricks bundle summary -t dev -p fevm-playground -o json | python3 -c "import json,sys;print(json.load(sys.stdin)['resources']['jobs']['ed_streaming']['id'])")
-databricks jobs cancel-all-runs --job-id $JOB -p fevm-playground
+databricks bundle deploy -t dev -p <profile> --var streaming_pause_status=PAUSED
+JOB=$(databricks bundle summary -t dev -p <profile> -o json | python3 -c "import json,sys;print(json.load(sys.stdin)['resources']['jobs']['ed_streaming']['id'])")
+databricks jobs cancel-all-runs --job-id $JOB -p <profile>
 ```
-Expected: `databricks jobs list-runs --job-id $JOB --active-only -p fevm-playground -o json` shows no active runs within a minute. Then wait 5 minutes so `streaming_active` turns false.
+Expected: `databricks jobs list-runs --job-id $JOB --active-only -p <profile> -o json` shows no active runs within a minute. Then wait 5 minutes so `streaming_active` turns false.
 
 - [ ] **Step 2: Run the upgraded setup against the existing deployment**
 
 ```bash
-databricks bundle run ed_setup -t dev -p fevm-playground
+databricks bundle run ed_setup -t dev -p <profile>
 ```
 Expected:
 - **All 9 tasks succeed.**
@@ -2291,7 +2291,7 @@ Expected:
 - [ ] **Step 3: Check the enrichment and narratives**
 
 ```bash
-C=hls_jagjit_lb_playground_catalog
+C=<catalog>
 scripts/run_sql.py \
   "SELECT ai_status, count(*) FROM $C.ed_silver.triage_notes GROUP BY 1 ORDER BY 1" \
   "SELECT count_if(residual_phi_flag), count_if(undertriage_flag), round(avg(CASE WHEN ai_status='ok' THEN 1 ELSE 0 END),3) FROM $C.ed_silver.triage_notes WHERE ai_enriched" \
@@ -2313,7 +2313,7 @@ Expected:
 - [ ] **Step 4: Resume live streaming and verify the new streams**
 
 ```bash
-databricks bundle deploy -t dev -p fevm-playground --var streaming_pause_status=UNPAUSED
+databricks bundle deploy -t dev -p <profile> --var streaming_pause_status=UNPAUSED
 ```
 Wait 20 minutes, then:
 ```bash
@@ -2329,12 +2329,12 @@ Expected:
 - `facility_current` less than 2 minutes old.
 - New notes mostly `ok`.
 
-Confirm the 7 tasks are RUNNING with `databricks jobs get-run <active run id> -p fevm-playground -o json`.
+Confirm the 7 tasks are RUNNING with `databricks jobs get-run <active run id> -p <profile> -o json`.
 
 - [ ] **Step 5: Run `ed_validate`**
 
 ```bash
-databricks bundle run ed_validate -t dev -p fevm-playground
+databricks bundle run ed_validate -t dev -p <profile>
 ```
 Expected:
 - All 11 tasks succeed.
@@ -2356,15 +2356,15 @@ Builds on `docs/runbook-plan1.md`. LLM endpoint: `databricks-claude-sonnet-5-5` 
 - ed_setup (serverless) is safe to re-run. Once the generator is live, generate/ingest/gold skip; the notes backfill,
   refresh_drivers and narratives refuse while ed_streaming is active, so pause it first:
 
-      databricks bundle deploy -t dev -p fevm-playground --var streaming_pause_status=PAUSED
-      JOB=$(databricks bundle summary -t dev -p fevm-playground -o json | python3 -c "import json,sys;print(json.load(sys.stdin)['resources']['jobs']['ed_streaming']['id'])")
-      databricks jobs cancel-all-runs --job-id $JOB -p fevm-playground      # wait 5 min, then:
-      databricks bundle run ed_setup -t dev -p fevm-playground
-      databricks bundle deploy -t dev -p fevm-playground --var streaming_pause_status=UNPAUSED
+      databricks bundle deploy -t dev -p <profile> --var streaming_pause_status=PAUSED
+      JOB=$(databricks bundle summary -t dev -p <profile> -o json | python3 -c "import json,sys;print(json.load(sys.stdin)['resources']['jobs']['ed_streaming']['id'])")
+      databricks jobs cancel-all-runs --job-id $JOB -p <profile>      # wait 5 min, then:
+      databricks bundle run ed_setup -t dev -p <profile>
+      databricks bundle deploy -t dev -p <profile> --var streaming_pause_status=UNPAUSED
 
 - ed_validate (serverless): end-to-end proof in ed_validate_* schemas, torn down afterwards:
 
-      databricks bundle run ed_validate -t dev -p fevm-playground
+      databricks bundle run ed_validate -t dev -p <profile>
 
 ## AI behaviour
 - ai_mask runs first, then a regex post-check (phone, MRN, full dates, email); everything else sees masked text only.
@@ -2379,8 +2379,8 @@ Builds on `docs/runbook-plan1.md`. LLM endpoint: `databricks-claude-sonnet-5-5` 
   in sampled silver/gold/ref data, or an ai_mask name miss rate above 2%.
 
 ## Useful queries
-    SELECT ai_status, count(*) FROM hls_jagjit_lb_playground_catalog.ed_silver.triage_notes GROUP BY 1
-    SELECT * FROM hls_jagjit_lb_playground_catalog.ed_gold.network_narrative
+    SELECT ai_status, count(*) FROM <catalog>.ed_silver.triage_notes GROUP BY 1
+    SELECT * FROM <catalog>.ed_gold.network_narrative
 ```
 
 ```bash

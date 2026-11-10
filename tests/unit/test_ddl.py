@@ -69,7 +69,7 @@ def test_create_table_sql_has_pk_clustering_cdf_and_escaped_comments():
     cfg = Config()
     t = parse_catalog_def(_minimal_doc()).table("gold", "t")
     sql = generate.create_table_sql(cfg, t)
-    assert sql.startswith("CREATE TABLE IF NOT EXISTS hls_jagjit_lb_playground_catalog.ed_gold.t (")
+    assert sql.startswith("CREATE TABLE IF NOT EXISTS main.ed_gold.t (")
     assert "id STRING NOT NULL COMMENT 'Key.'" in sql
     assert "v INT COMMENT 'It\\'s a value.'" in sql
     assert "CONSTRAINT t_pk PRIMARY KEY (id)" in sql
@@ -89,13 +89,13 @@ def test_tag_and_comment_statements():
     t = parse_catalog_def(_minimal_doc()).table("gold", "t")
     tags = generate.tag_sqls(cfg, t)
     assert tags[0] == (
-        "ALTER TABLE hls_jagjit_lb_playground_catalog.ed_gold.t SET TAGS "
+        "ALTER TABLE main.ed_gold.t SET TAGS "
         "('layer' = 'gold', 'domain' = 'ed', 'data_origin' = 'synthetic', 'data_classification' = 'internal', 'contains_phi' = 'false')"
     )
-    assert tags[1] == "ALTER TABLE hls_jagjit_lb_playground_catalog.ed_gold.t ALTER COLUMN v SET TAGS ('unit' = 'count')"
+    assert tags[1] == "ALTER TABLE main.ed_gold.t ALTER COLUMN v SET TAGS ('unit' = 'count')"
     comments = generate.comment_sqls(cfg, t)
-    assert comments[0] == "COMMENT ON TABLE hls_jagjit_lb_playground_catalog.ed_gold.t IS 'A table.'"
-    assert comments[1] == "ALTER TABLE hls_jagjit_lb_playground_catalog.ed_gold.t ALTER COLUMN id COMMENT 'Key.'"
+    assert comments[0] == "COMMENT ON TABLE main.ed_gold.t IS 'A table.'"
+    assert comments[1] == "ALTER TABLE main.ed_gold.t ALTER COLUMN id COMMENT 'Key.'"
 
 
 def test_ddl_statements_order_schemas_volumes_tables():

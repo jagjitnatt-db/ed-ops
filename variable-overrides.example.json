@@ -1,0 +1,5 @@
+{
+  "catalog": "<existing Unity Catalog catalog>",
+  "warehouse_id": "<SQL warehouse id>",
+  "run_as_service_principal": "<service principal application id - customer target only>"
+}

@@ -137,3 +137,15 @@ def test_generator_to_silver_contract_end_to_end(spark, tmp_path):
         assert v.departure_ts == p.departure_ts.to_pydatetime()
         assert v.esi_level == p.nurse_esi
         assert (v.lwbs_ts is None) == pd.isna(p.lwbs_ts)
+
+
+def test_salt_is_read_server_side_not_embedded_as_literal(spark):
+    from ed_ops.governance.deid import salt_expr
+
+    expr = str(salt_expr(Config(secret_scope="ed_ops_test")))
+    assert "secret" in expr and "ed_ops_test" in expr and "mrn_salt" in expr
+
+
+def test_deidentify_accepts_a_salt_column(spark):
+    df = deidentify(spark.createDataFrame([JOURNEY[0]], BRONZE_DDL), F.lit(SALT))
+    assert df.collect()[0].mrn_hash == hashlib.sha256(("MRN-7000042" + SALT).encode()).hexdigest()

@@ -160,8 +160,8 @@ tables:
       - {name: gedwin_delta_1h, type: DOUBLE, comment: "gEDWIN at snapshot_ts minus gEDWIN one hour earlier; positive means deteriorating."}
       - {name: boarders_n, type: INT, comment: "Census patients with an ADMIT disposition still in the ED (boarders)."}
       - {name: vents_n, type: INT, comment: "Census patients on a ventilator at snapshot_ts."}
-      - {name: longest_boarder_h, type: DOUBLE, comment: "Hours since admit decision of the longest-waiting boarder; null when there are no boarders."}
-      - {name: last_bedded_wait_h, type: DOUBLE, comment: "Door-to-bed hours of the most recent patient assigned a bed in the 24 hours ending snapshot_ts."}
+      - {name: longest_boarder_h, type: DOUBLE, comment: "Hours since admit decision of the longest-waiting boarder; 0 when there are no boarders."}
+      - {name: last_bedded_wait_h, type: DOUBLE, comment: "Door-to-bed hours of the most recent patient assigned a bed in the 24 hours ending snapshot_ts; 0 when none."}
       - {name: nedocs, type: DOUBLE, comment: "NEDOCS = -20 + 85.8*(census/ed_beds) + 600*(boarders/inpatient_beds) + 13.4*vents + 0.93*longest_boarder_h + 5.64*last_bedded_wait_h, clamped to 0-200."}
       - {name: nedocs_level, type: INT, comment: "NEDOCS level: 1 not busy (<= 20), 2 busy (<= 60), 3 extremely busy (<= 100), 4 overcrowded (<= 140), 5 severely overcrowded (<= 180), 6 dangerously overcrowded."}
       - {name: lwbs_rate_24h, type: DOUBLE, comment: "Share of departures in the 24 hours ending snapshot_ts that left without being seen."}

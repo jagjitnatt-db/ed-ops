@@ -16,7 +16,7 @@ from ed_ops.generator.reference import load_reference
 from ed_ops.generator.roster import build_roster
 from ed_ops.generator.stores import DeltaStore
 from ed_ops.generator.tick import advance, initial_state
-from ed_ops.governance.deid import ensure_salt, get_salt
+from ed_ops.governance.deid import ensure_salt
 from ed_ops.pipeline import gold_metrics
 from ed_ops.pipeline.bronze import start_bronze
 from ed_ops.pipeline.silver_visits import start_silver_visits
@@ -51,7 +51,7 @@ def backfill_generate(spark: SparkSession, cfg: Config) -> None:
 
 def backfill_ingest(spark: SparkSession, cfg: Config) -> None:
     start_bronze(spark, cfg, available_now=True).awaitTermination()
-    start_silver_visits(spark, cfg, get_salt(cfg), available_now=True).awaitTermination()
+    start_silver_visits(spark, cfg, available_now=True).awaitTermination()
 
 
 def backfill_gold(spark: SparkSession, cfg: Config) -> None:

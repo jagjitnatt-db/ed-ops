@@ -85,7 +85,7 @@ def _in_ed_stats(grid_b: DataFrame, visits: DataFrame) -> DataFrame:
     end = F.least(F.coalesce(departure, arrival + MAX_STAY()), arrival + MAX_STAY())
     pairs = _pairs(
         grid_b,
-        _candidates(visits.filter(arrival.isNotNull()), arrival, end),
+        _candidates(visits.filter(arrival.isNotNull() & (departure.isNull() | (departure >= arrival))), arrival, end),
         (arrival <= T()) & (arrival > T() - MAX_STAY()) & (departure.isNull() | (departure > T())),
     )
     esi_t = F.when(F.col("triage_ts") <= T(), F.col("esi_level"))
@@ -133,15 +133,17 @@ def _arrival_stats(grid_b: DataFrame, visits: DataFrame) -> DataFrame:
 
 
 def _last_bedded(grid_b: DataFrame, visits: DataFrame) -> DataFrame:
-    pairs = _window_pairs(grid_b, visits, "bed_assigned_ts", WIN_24H())
+    pairs = _window_pairs(grid_b, visits.filter(F.col("bed_assigned_ts") >= F.col("arrival_ts")), "bed_assigned_ts", WIN_24H())
     wait_h = _seconds(F.col("bed_assigned_ts"), F.col("arrival_ts")) / 3600.0
     return pairs.groupBy(*KEYS).agg(F.max_by(wait_h, F.col("bed_assigned_ts")).alias("last_bedded_wait_h"))
 
 
 def _departure_stats(grid_b: DataFrame, visits: DataFrame) -> DataFrame:
     pairs = _window_pairs(grid_b, visits, "departure_ts", WIN_24H())
-    los_h = F.when(F.col("disposition") == "DISCHARGE", _seconds(F.col("departure_ts"), F.col("arrival_ts")) / 3600.0)
-    boarding_h = F.when(F.col("disposition") == "ADMIT", _seconds(F.col("departure_ts"), F.col("disposition_ts")) / 3600.0)
+    los_h = F.when((F.col("disposition") == "DISCHARGE") & (F.col("departure_ts") >= F.col("arrival_ts")),
+                   _seconds(F.col("departure_ts"), F.col("arrival_ts")) / 3600.0)
+    boarding_h = F.when((F.col("disposition") == "ADMIT") & (F.col("departure_ts") >= F.col("disposition_ts")),
+                        _seconds(F.col("departure_ts"), F.col("disposition_ts")) / 3600.0)
     return pairs.groupBy(*KEYS).agg(
         F.try_divide(_count_if(F.col("lwbs_ts").isNotNull()).cast("double"), F.count(F.lit(1)).cast("double")).alias("lwbs_rate_24h"),
         F.percentile(los_h, 0.5).alias("los_median_h_24h"),
@@ -159,7 +161,7 @@ def _disposition_stats(grid_b: DataFrame, visits: DataFrame) -> DataFrame:
 
 def _attendings(grid_b: DataFrame, roster: DataFrame) -> DataFrame:
     start, end = F.col("shift_start"), F.col("shift_end")
-    pairs = _pairs(grid_b, _candidates(roster, start, end), (start <= T()) & (end > T()))
+    pairs = _pairs(grid_b, _candidates(roster.filter(end > start), start, end), (start <= T()) & (end > T()))
     return pairs.groupBy(*KEYS).agg(F.sum("attendings_on_duty").cast("int").alias("attendings_on_duty"))
 
 
@@ -177,7 +179,7 @@ def _metrics_at(visits: DataFrame, roster: DataFrame, facilities: DataFrame, tim
         _attendings(grid_b, roster),
     ):
         df = df.join(part, KEYS, "left")
-    df = df.fillna(0, subset=list(_COUNT_COLUMNS))
+    df = df.fillna(0, subset=list(_COUNT_COLUMNS)).fillna(0.0, subset=["longest_boarder_h", "last_bedded_wait_h"])
     census, beds, attendings = F.col("census"), F.col("ed_beds"), F.col("attendings_on_duty")
     df = (
         df.withColumn("occupancy_ratio", F.try_divide(census.cast("double"), beds.cast("double")))

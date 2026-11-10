@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import secrets
 
-from pyspark.sql import DataFrame
+from pyspark.sql import Column, DataFrame
 from pyspark.sql import functions as F
 
 from ed_ops.config import Config
@@ -14,12 +14,18 @@ SALT_KEY = "mrn_salt"
 DEID_COLUMNS = ("patient_name_redacted", "mrn_hash", "birth_year", "age_at_arrival", "sex", "phone_last4", "city", "state")
 
 
-def deidentify(events: DataFrame, salt: str) -> DataFrame:
+def salt_expr(cfg: Config) -> Column:
+    """The MRN salt read server-side with secret(): never a Python value, so it stays out of query plans."""
+    return F.expr(f"secret('{cfg.secret_scope}', '{SALT_KEY}')")
+
+
+def deidentify(events: DataFrame, salt: str | Column) -> DataFrame:
+    salt_col = salt if isinstance(salt, Column) else F.lit(salt)
     p = F.col("payload")
     arrival = F.col("event_type") == "ARRIVAL"
     return (
         events.withColumn("patient_name_redacted", F.when(arrival & p["patient_name"].isNotNull(), F.lit("REDACTED")))
-        .withColumn("mrn_hash", F.when(arrival & p["mrn"].isNotNull(), F.sha2(F.concat(p["mrn"], F.lit(salt)), 256)))
+        .withColumn("mrn_hash", F.when(arrival & p["mrn"].isNotNull(), F.sha2(F.concat(p["mrn"], salt_col), 256)))
         .withColumn("birth_year", F.when(arrival, F.year(p["dob"])))
         .withColumn("age_at_arrival", F.when(arrival, F.floor(F.months_between(F.col("event_ts"), p["dob"]) / 12).cast("int")))
         .withColumn("sex", F.when(arrival, p["sex"]))
@@ -49,8 +55,3 @@ def ensure_salt(cfg: Config) -> None:
     if SALT_KEY not in {k.key for k in w.secrets.list_secrets(scope=cfg.secret_scope)}:
         w.secrets.put_secret(scope=cfg.secret_scope, key=SALT_KEY, string_value=secrets.token_hex(32))
 
-
-def get_salt(cfg: Config) -> str:
-    from databricks.sdk.runtime import dbutils
-
-    return dbutils.secrets.get(scope=cfg.secret_scope, key=SALT_KEY)

@@ -14,7 +14,6 @@ from ed_ops.generator.reference import ReferenceData, load_reference
 from ed_ops.generator.roster import build_roster
 from ed_ops.generator.stores import DeltaStore
 from ed_ops.generator.tick import advance
-from ed_ops.governance.deid import get_salt
 from ed_ops.pipeline.bronze import start_bronze
 from ed_ops.pipeline.gold_metrics import start_gold_metrics
 from ed_ops.pipeline.silver_visits import start_silver_visits
@@ -70,7 +69,7 @@ def run_bronze(spark: SparkSession, cfg: Config) -> None:
 
 
 def run_silver_visits(spark: SparkSession, cfg: Config) -> None:
-    start_silver_visits(spark, cfg, get_salt(cfg)).awaitTermination()
+    start_silver_visits(spark, cfg).awaitTermination()
 
 
 def run_gold_metrics(spark: SparkSession, cfg: Config) -> None:

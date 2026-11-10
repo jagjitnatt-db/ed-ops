@@ -36,3 +36,22 @@ def test_tick_frames_shapes_match_gold_tables(spark):
 
     board = conform(frames.board, table_def("gold", "ed_board_current")).collect()
     assert {r.visit_id for r in board} == {"v1", "v2", "v3", "v4", "v5", "v9"}
+
+
+def test_pending_gap_covers_downtime_plus_late_event_margin():
+    from ed_ops.pipeline.gold_metrics import pending_gap
+
+    now = datetime(2026, 11, 9, 12, 2)
+    assert pending_gap(None, now) is None
+    assert pending_gap(datetime(2026, 11, 9, 11, 35), now) is None  # ticker's own 30-min recompute covers it
+    assert pending_gap(datetime(2026, 11, 9, 9, 0), now) == (datetime(2026, 11, 9, 8, 30), datetime(2026, 11, 9, 11, 30))
+
+
+def test_gap_fill_waits_until_generator_and_silver_caught_up():
+    from ed_ops.pipeline.gold_metrics import caught_up
+
+    now = datetime(2026, 11, 9, 12, 0)
+    assert caught_up(now - timedelta(minutes=1), now - timedelta(minutes=2), now, 60)
+    assert not caught_up(now - timedelta(hours=2), now - timedelta(hours=2), now, 60)  # generator still catching up
+    assert not caught_up(now - timedelta(minutes=1), now - timedelta(hours=1), now, 60)  # silver behind the generator
+    assert not caught_up(None, now, now, 60)

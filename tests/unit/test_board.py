@@ -20,3 +20,13 @@ def test_board_columns_match_table(spark):
 
     expected = load_catalog_def().table("gold", "ed_board_current").column_names
     assert board_rows(visits_df(spark, SCENARIO_VISITS), T).columns == expected
+
+
+def test_open_board_rows_are_closed_after_downtime(spark):
+    # v6 left (LWBS) at T-200, long before the 30-minute lookback, but the board still shows it in_ed = true.
+    open_keys = spark.createDataFrame([("FAC001", "v6"), ("FAC001", "v1")], "facility_id STRING, visit_id STRING")
+    rows = {r["visit_id"]: r.asDict() for r in board_rows(visits_df(spark, SCENARIO_VISITS), T, open_keys).collect()}
+    assert rows["v6"]["in_ed"] is False and rows["v6"]["status"] == "departed"
+    assert rows["v6"]["departed_ts"] is not None
+    assert rows["v1"]["in_ed"] is True  # still in the ED: unchanged
+    assert "v7" not in rows  # departed > 30 min ago and not open on the board

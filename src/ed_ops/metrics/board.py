@@ -11,7 +11,9 @@ def DEPARTED_LOOKBACK():
     return F.expr("INTERVAL 30 MINUTES")
 
 
-def board_rows(visits: DataFrame, as_of: datetime) -> DataFrame:
+def board_rows(visits: DataFrame, as_of: datetime, open_keys: DataFrame | None = None) -> DataFrame:
+    """Board rows as of `as_of`. `open_keys` (facility_id, visit_id) are rows the board currently shows as
+    in_ed = true; they are always re-emitted so visits that left during downtime get closed (no deletes)."""
     t = F.lit(as_of).cast("timestamp")
     arrival, departure = F.col("arrival_ts"), F.col("departure_ts")
     in_ed = (arrival <= t) & (departure.isNull() | (departure > t))
@@ -22,7 +24,15 @@ def board_rows(visits: DataFrame, as_of: datetime) -> DataFrame:
     on_vent = F.coalesce(
         (F.col("vent_start_ts") <= t) & (F.col("vent_end_ts").isNull() | (F.col("vent_end_ts") > t)), F.lit(False)
     )
-    df = visits.filter(arrival.isNotNull() & (in_ed | departed_recently)).withColumn("in_ed", in_ed)
+    if open_keys is not None:
+        visits = visits.join(
+            F.broadcast(open_keys.select("facility_id", "visit_id").distinct().withColumn("_open", F.lit(True))),
+            ["facility_id", "visit_id"], "left",
+        )
+        keep = in_ed | departed_recently | F.coalesce(F.col("_open"), F.lit(False))
+    else:
+        keep = in_ed | departed_recently
+    df = visits.filter(arrival.isNotNull() & keep).withColumn("in_ed", in_ed)
     end = F.when(F.col("in_ed"), t).otherwise(departure)
     waited_until = F.when(greeted, F.col("greet_ts")).otherwise(end)
     minutes = lambda later, earlier: F.floor((F.unix_timestamp(later) - F.unix_timestamp(earlier)) / 60).cast("int")

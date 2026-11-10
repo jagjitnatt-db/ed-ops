@@ -115,3 +115,18 @@ def test_negative_door_to_provider_ignored(spark):
     bad = visit("neg", m(-20), esi=3, triage=m(-19), greet=m(-25), disposition="DISCHARGE", disposition_ts=m(-10), departure=m(-2))
     r = _rows(compute_snapshots(visits_df(spark, [bad]), roster_df(spark, []), facilities_df(spark, [("FAC001", 20, 300)]), as_of_df(spark, T)))[("FAC001", T)]
     assert r["d2p_sample_n"] == 0
+
+
+def test_inverted_intervals_do_not_crash_or_go_negative(spark):
+    # departure in an earlier hour than arrival, and bed before arrival: must not raise, must not go negative
+    bad = visit("inv", m(-30), esi=3, triage=m(-25), bed=m(-200), disposition="DISCHARGE", disposition_ts=m(-20),
+                departure=m(-150))
+    bad2 = visit("inv2", m(-30), esi=3, triage=m(-25), disposition="ADMIT", disposition_ts=m(-10), departure=m(-40))
+    r = _rows(compute_snapshots(visits_df(spark, [bad, bad2]), roster_df(spark, []), facilities_df(spark, [("FAC001", 20, 300)]), as_of_df(spark, T)))[("FAC001", T)]
+    assert r["last_bedded_wait_h"] == 0.0
+    assert r["los_median_h_24h"] is None and r["boarding_median_h_24h"] is None
+
+
+def test_no_boarders_or_beds_report_zero_not_null(spark):
+    r = _rows(compute_snapshots(visits_df(spark, []), roster_df(spark, []), facilities_df(spark, [("FAC001", 20, 300)]), as_of_df(spark, T)))[("FAC001", T)]
+    assert r["longest_boarder_h"] == 0.0 and r["last_bedded_wait_h"] == 0.0

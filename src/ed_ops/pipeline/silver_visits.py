@@ -12,7 +12,7 @@ from pyspark.sql.streaming import StreamingQuery
 from ed_ops.config import Config
 from ed_ops.delta import append_into
 from ed_ops.events_contract import EVENT_TYPES
-from ed_ops.governance.deid import DEID_COLUMNS, deidentify
+from ed_ops.governance.deid import DEID_COLUMNS, deidentify, salt_expr
 
 REASON_CODES = (
     "unparseable", "missing_event_ts", "missing_facility_id", "missing_visit_id", "invalid_event_type",
@@ -103,7 +103,7 @@ def visits_merge_sql(target: str, source_view: str) -> str:
     )
 
 
-def process_batch(batch_df: DataFrame, cfg: Config, salt: str) -> None:
+def process_batch(batch_df: DataFrame, cfg: Config) -> None:
     spark = batch_df.sparkSession
     events = batch_df.dropDuplicates(["event_id"])
     facility_ids = spark.table(cfg.table("ref", "facility")).select("facility_id")
@@ -111,17 +111,17 @@ def process_batch(batch_df: DataFrame, cfg: Config, salt: str) -> None:
     if not rejected.isEmpty():
         append_into(quarantine_rows(rejected), cfg, "silver", "ed_events_quarantine")
     view = f"silver_visits_src_{uuid.uuid4().hex[:8]}"
-    fold_events(deidentify(valid, salt)).createOrReplaceTempView(view)
+    fold_events(deidentify(valid, salt_expr(cfg))).createOrReplaceTempView(view)
     try:
         spark.sql(visits_merge_sql(cfg.table("silver", "ed_visits"), view))
     finally:
         spark.catalog.dropTempView(view)
 
 
-def start_silver_visits(spark: SparkSession, cfg: Config, salt: str, available_now: bool = False) -> StreamingQuery:
+def start_silver_visits(spark: SparkSession, cfg: Config, available_now: bool = False) -> StreamingQuery:
     writer = (
         spark.readStream.table(cfg.table("bronze", "ed_events"))
-        .writeStream.foreachBatch(lambda df, _batch_id: process_batch(df, cfg, salt))
+        .writeStream.foreachBatch(lambda df, _batch_id: process_batch(df, cfg))
         .option("checkpointLocation", cfg.checkpoint("silver_visits"))
     )
     writer = writer.trigger(availableNow=True) if available_now else writer.trigger(processingTime="30 seconds")

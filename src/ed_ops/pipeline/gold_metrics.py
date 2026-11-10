@@ -62,7 +62,8 @@ def load_facilities(spark: SparkSession, cfg: Config) -> DataFrame:
 
 
 def compute_tick_frames(visits: DataFrame, roster: DataFrame, facilities: DataFrame, baselines: DataFrame,
-                        now: datetime, tz: str) -> TickFrames:
+                        now: datetime, tz: str, board_visits: DataFrame | None = None,
+                        open_keys: DataFrame | None = None) -> TickFrames:
     spark = visits.sparkSession
     marks = five_minute_marks(now - HISTORY_RECOMPUTE, now)
     snaps = compute_snapshots(visits, roster, facilities, _times(spark, sorted(set(marks) | {now})))
@@ -71,7 +72,8 @@ def compute_tick_frames(visits: DataFrame, roster: DataFrame, facilities: DataFr
         facilities.select("facility_id", "facility_name", "facility_type", "region"), "facility_id"
     )
     history = snaps.filter(F.col("snapshot_ts").isin(marks))
-    return TickFrames(current=current, history=history, board=board_rows(visits, now))
+    board = board_rows(visits if board_visits is None else board_visits, now, open_keys)
+    return TickFrames(current=current, history=history, board=board)
 
 
 class BaselineCache:
@@ -98,7 +100,14 @@ def gold_tick(spark: SparkSession, cfg: Config, now: datetime, cache: BaselineCa
         & (F.col("departure_ts").isNull() | (F.col("departure_ts") > F.lit(now - timedelta(hours=25))))
     )
     roster = load_roster(spark, cfg).filter(F.col("shift_end") > F.lit(now - timedelta(days=2)))
-    frames = compute_tick_frames(visits, roster, load_facilities(spark, cfg), cache.get(spark, cfg, now), now, cfg.timezone)
+    # Visits the board still shows in the ED are re-emitted whatever their age, so downtime cannot leave ghosts.
+    open_keys = _materialize(
+        spark.table(cfg.table("gold", "ed_board_current")).filter(F.col("in_ed")).select("facility_id", "visit_id")
+    )
+    open_visits = load_visits(spark, cfg).join(open_keys, ["facility_id", "visit_id"], "left_semi")
+    board_visits = visits.unionByName(open_visits).dropDuplicates(["facility_id", "visit_id"])
+    frames = compute_tick_frames(visits, roster, load_facilities(spark, cfg), cache.get(spark, cfg, now), now,
+                                 cfg.timezone, board_visits=board_visits, open_keys=open_keys)
     merge_into(frames.current, cfg, "gold", "facility_current")
     merge_into(frames.history, cfg, "gold", "facility_snapshot_5min")
     merge_into(frames.board, cfg, "gold", "ed_board_current")
@@ -122,20 +131,52 @@ def backfill_snapshots(spark: SparkSession, cfg: Config, start: datetime, end: d
     merge_into(add_drivers(window, baselines, cfg.timezone), cfg, "gold", "facility_snapshot_5min")
 
 
-def fill_gap(spark: SparkSession, cfg: Config, now: datetime) -> None:
-    """After setup or downtime, backfill history older than the ticker's 30-minute recompute window."""
-    last = spark.table(cfg.table("gold", "facility_snapshot_5min")).agg(F.max("snapshot_ts")).collect()[0][0]
+CATCH_UP_SLACK = timedelta(minutes=5)
+
+
+def pending_gap(last_snapshot: datetime | None, now: datetime) -> tuple[datetime, datetime] | None:
+    """History older than the ticker's 30-minute recompute window that must be backfilled after setup or downtime.
+    The range starts 30 minutes before the last stored snapshot so late events around the outage are re-covered."""
     gap_end = floor_to(now - HISTORY_RECOMPUTE, 300)
-    if last is not None and last < gap_end:
-        backfill_snapshots(spark, cfg, last, gap_end)
+    if last_snapshot is None or last_snapshot >= gap_end:
+        return None
+    return last_snapshot - HISTORY_RECOMPUTE, gap_end
+
+
+def caught_up(generator_last_emitted: datetime | None, silver_last_event: datetime | None, now: datetime,
+              tick_seconds: int) -> bool:
+    """True once the generator has emitted up to (nearly) now and silver has ingested what it emitted."""
+    if generator_last_emitted is None or silver_last_event is None:
+        return False
+    return (generator_last_emitted >= now - timedelta(seconds=3 * tick_seconds)
+            and silver_last_event >= generator_last_emitted - CATCH_UP_SLACK)
+
+
+class GapFiller:
+    """Backfills a pending history gap once upstream streams have caught up (never from stale silver)."""
+
+    def __init__(self, gap: tuple[datetime, datetime] | None) -> None:
+        self.gap = gap
+
+    def maybe_fill(self, spark: SparkSession, cfg: Config, now: datetime) -> None:
+        if self.gap is None:
+            return
+        last_emitted = spark.table(cfg.table("sim", "generator_state")).agg(F.max("last_emitted_ts")).collect()[0][0]
+        silver_last = spark.table(cfg.table("silver", "ed_visits")).agg(F.max("last_event_ts")).collect()[0][0]
+        if caught_up(last_emitted, silver_last, now, cfg.tick_seconds):
+            backfill_snapshots(spark, cfg, *self.gap)
+            self.gap = None
 
 
 def start_gold_metrics(spark: SparkSession, cfg: Config) -> StreamingQuery:
-    fill_gap(spark, cfg, floor_to(utcnow(), 60))
+    last = spark.table(cfg.table("gold", "facility_snapshot_5min")).agg(F.max("snapshot_ts")).collect()[0][0]
+    filler = GapFiller(pending_gap(last, floor_to(utcnow(), 60)))
     cache = BaselineCache()
 
     def tick(batch_df: DataFrame, _batch_id: int) -> None:
-        gold_tick(batch_df.sparkSession, cfg, floor_to(utcnow(), 60), cache)
+        session, now = batch_df.sparkSession, floor_to(utcnow(), 60)
+        filler.maybe_fill(session, cfg, now)
+        gold_tick(session, cfg, now, cache)
 
     return (
         spark.readStream.format("rate").option("rowsPerSecond", 1).load()

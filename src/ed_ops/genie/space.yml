@@ -1,0 +1,76 @@
+# Genie space definition (spec 14). Identifiers and SQL use {bronze} {silver} {gold} {ref} {sim} {serving} schema
+# placeholders and {timezone}; ed_setup renders them per catalog/prefix and creates or updates the space by title.
+description: >-
+  Ask about emergency-department crowding across the health system: current status, trends, door-to-provider waits,
+  boarding, AI triage insights and AI-written explanations. All data is synthetic and de-identified.
+tables:
+  - gold.facility_current
+  - gold.facility_snapshot_5min
+  - gold.visit_facts
+  - gold.facility_narrative
+  - gold.network_narrative
+  - silver.triage_notes
+  - ref.facility
+  - ref.physician_roster
+instructions: |
+  Glossary: census = patients in the ED now (including the waiting room). Door-to-provider (D2P) = minutes from arrival to provider greet.
+  Boarding = an admitted patient still in the ED waiting for an inpatient bed. LWBS = left without being seen.
+  ESI = Emergency Severity Index, 1 (most acute) to 5 (least acute).
+  Crowding indices: gEDWIN is the headline score (bands: Active < 2.06, Busy 2.06-2.34, Crowded > 2.34); EDWIN bands: Active < 1.5,
+  Busy 1.5-2, Crowded > 2; NEDOCS is 0-200 with levels 1 (not busy) to 6 (dangerously overcrowded).
+  "Crowded" means gedwin_band = 'Crowded' unless the user explicitly asks about EDWIN or NEDOCS.
+  Use facility_current for questions about now; facility_snapshot_5min for history and trends (one row per facility every 5 minutes);
+  visit_facts for per-visit questions (waits, length of stay, dispositions); triage_notes for complaint categories, vitals and AI triage
+  (exclude ai_status = 'skipped'); facility_narrative and network_narrative for plain-English explanations.
+  All timestamps are UTC; convert with from_utc_timestamp(ts, '{timezone}') for local-time questions such as hour of day.
+  top_drivers is an array of structs (driver, value, baseline, z); use explode(top_drivers) to analyse drivers.
+  suggested_esi and undertriage_flag are AI decision support, not clinical decisions.
+  Show facility_name rather than facility_id in answers and round scores to 2 decimals and minutes to 1 decimal.
+examples:
+  - question: Which facilities are crowded right now?
+    sql: |
+      SELECT facility_name, round(gedwin, 2) AS gedwin, census, round(d2p_median_min, 1) AS d2p_median_min, boarders_n
+      FROM {gold}.facility_current WHERE gedwin_band = 'Crowded' ORDER BY gedwin DESC
+  - question: What share of the last 24 hours did each facility spend crowded?
+    sql: |
+      SELECT f.facility_name, round(100 * avg(CASE WHEN s.gedwin_band = 'Crowded' THEN 1 ELSE 0 END), 1) AS pct_crowded_24h
+      FROM {gold}.facility_snapshot_5min s JOIN {ref}.facility f ON f.facility_id = s.facility_id
+      WHERE s.snapshot_ts > current_timestamp() - INTERVAL 24 HOURS
+      GROUP BY f.facility_name ORDER BY pct_crowded_24h DESC
+  - question: Show the hourly 90th percentile door-to-provider time for FAC001 over the last 24 hours
+    sql: |
+      SELECT date_trunc('hour', from_utc_timestamp(snapshot_ts, '{timezone}')) AS local_hour, round(avg(d2p_p90_min), 1) AS d2p_p90_min
+      FROM {gold}.facility_snapshot_5min
+      WHERE facility_id = 'FAC001' AND snapshot_ts > current_timestamp() - INTERVAL 24 HOURS
+      GROUP BY 1 ORDER BY 1
+  - question: Where is boarding worst right now?
+    sql: |
+      SELECT facility_name, boarders_n, round(longest_boarder_h, 1) AS longest_boarder_h, nedocs_level
+      FROM {gold}.facility_current ORDER BY boarders_n DESC, longest_boarder_h DESC LIMIT 10
+  - question: Which facilities had the most AI-flagged under-triage in the last 7 days?
+    sql: |
+      SELECT facility_name, count(*) AS undertriaged_visits
+      FROM {gold}.visit_facts WHERE undertriage_flag AND arrival_ts > current_timestamp() - INTERVAL 7 DAYS
+      GROUP BY facility_name ORDER BY undertriaged_visits DESC
+  - question: Where do EDWIN and gEDWIN disagree most on the crowding ranking?
+    sql: |
+      WITH r AS (SELECT facility_name, rank() OVER (ORDER BY edwin DESC) AS edwin_rank, rank() OVER (ORDER BY gedwin DESC) AS gedwin_rank
+                 FROM {gold}.facility_current)
+      SELECT facility_name, edwin_rank, gedwin_rank, abs(edwin_rank - gedwin_rank) AS rank_gap FROM r ORDER BY rank_gap DESC LIMIT 10
+  - question: What is the LWBS rate by facility type?
+    sql: |
+      SELECT facility_type, round(100 * avg(lwbs_rate_24h), 1) AS lwbs_pct_24h
+      FROM {gold}.facility_current GROUP BY facility_type ORDER BY lwbs_pct_24h DESC
+  - question: What is the busiest local hour of the day for arrivals?
+    sql: |
+      SELECT hour(from_utc_timestamp(arrival_ts, '{timezone}')) AS local_hour, count(*) AS arrivals
+      FROM {gold}.visit_facts GROUP BY 1 ORDER BY arrivals DESC
+  - question: Which facilities are deteriorating fastest in the last hour?
+    sql: |
+      SELECT facility_name, round(gedwin, 2) AS gedwin, round(gedwin_delta_1h, 2) AS gedwin_change_1h, gedwin_band
+      FROM {gold}.facility_current WHERE gedwin_delta_1h IS NOT NULL ORDER BY gedwin_delta_1h DESC LIMIT 10
+  - question: What is the complaint mix at FAC001 in the last 24 hours?
+    sql: |
+      SELECT complaint_category, count(*) AS notes
+      FROM {silver}.triage_notes WHERE facility_id = 'FAC001' AND ai_status = 'ok' AND triage_ts > current_timestamp() - INTERVAL 24 HOURS
+      GROUP BY complaint_category ORDER BY notes DESC

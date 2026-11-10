@@ -1,0 +1,30 @@
+# Genie benchmark questions with expected SQL (spec 14). Answers are stable reference data or long-run aggregates,
+# so live streaming does not change them between the Genie query and the expected query.
+- question: How many facilities are there of each facility type?
+  sql: SELECT facility_type, count(*) FROM {ref}.facility GROUP BY facility_type
+- question: Which facility has the most ED beds?
+  sql: SELECT facility_name, ed_beds FROM {ref}.facility ORDER BY ed_beds DESC LIMIT 1
+- question: How many Level I trauma centers are in the network?
+  sql: SELECT count(*) FROM {ref}.facility WHERE facility_type = 'level_1_trauma'
+- question: Which region has the most inpatient beds in total?
+  sql: SELECT region, sum(inpatient_beds) FROM {ref}.facility GROUP BY region ORDER BY 2 DESC LIMIT 1
+- question: What is the average number of ED beds by facility type?
+  sql: SELECT facility_type, round(avg(ed_beds), 1) FROM {ref}.facility GROUP BY facility_type
+- question: How many facilities have the chronic_boarding scenario profile?
+  sql: SELECT count(*) FROM {ref}.facility WHERE scenario_profile = 'chronic_boarding'
+- question: How many distinct regions are there?
+  sql: SELECT count(DISTINCT region) FROM {ref}.facility
+- question: What is the facility type of FAC001?
+  sql: SELECT facility_type FROM {ref}.facility WHERE facility_id = 'FAC001'
+- question: What is the average number of attending physicians on the night shift at FAC001?
+  sql: SELECT round(avg(attendings_on_duty), 1) FROM {ref}.physician_roster WHERE facility_id = 'FAC001' AND shift_name = 'night'
+- question: Which 3 facilities have the highest average NEDOCS score across all stored history?
+  sql: |
+    SELECT f.facility_name FROM {gold}.facility_snapshot_5min s JOIN {ref}.facility f ON f.facility_id = s.facility_id
+    GROUP BY f.facility_name ORDER BY avg(s.nedocs) DESC LIMIT 3
+- question: Which facility has the lowest average door-to-provider median across all stored history?
+  sql: |
+    SELECT f.facility_name FROM {gold}.facility_snapshot_5min s JOIN {ref}.facility f ON f.facility_id = s.facility_id
+    GROUP BY f.facility_name ORDER BY avg(s.d2p_median_min) ASC LIMIT 1
+- question: How many pediatric facilities are there?
+  sql: SELECT count(*) FROM {ref}.facility WHERE facility_type = 'pediatric'

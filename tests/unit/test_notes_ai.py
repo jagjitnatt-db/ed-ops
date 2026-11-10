@@ -100,3 +100,29 @@ def test_triage_events_keeps_valid_deduplicated_triage_only(spark):
     ]
     df = triage_events(spark.createDataFrame(rows, BRONZE_DDL), spark.createDataFrame([("FAC001",)], "facility_id STRING"))
     assert [r.visit_id for r in df.collect()] == ["FAC001-v1"]
+
+
+def test_notes_merge_never_overwrites_ok_and_counts_attempts():
+    from ed_ops.pipeline.silver_notes_ai import notes_merge_sql
+
+    sql = notes_merge_sql("c.ed_silver.triage_notes", "src")
+    assert "WHEN MATCHED AND (t.ai_status IS NULL OR t.ai_status <> 'ok') THEN UPDATE SET" in sql
+    assert "t.ai_attempts = coalesce(t.ai_attempts, 0) + 1" in sql
+    assert "t.ai_attempts = s.ai_attempts" not in sql
+    insert_cols = sql.split("INSERT (")[1].split(")")[0].split(", ")
+    assert insert_cols == table_def("silver", "triage_notes").column_names
+
+
+def test_retry_candidates_and_successful_retry(spark):
+    from ed_ops.pipeline.silver_notes_ai import retry_candidates, retry_rows
+
+    df = spark.createDataFrame([triage("ok", NOW, NOTE), triage("err", NOW, NOTE + " FAILME"),
+                                triage("bad", NOW, NOTE + " GARBAGE"), triage("old", SINCE - timedelta(days=1), NOTE)], BRONZE_DDL)
+    notes = notes_rows(df, FakeAi(), SINCE)
+    exhausted = notes.withColumn("ai_attempts", F.when(F.col("visit_id") == "FAC001-bad", F.lit(3)).otherwise(F.col("ai_attempts")))
+    cands = retry_candidates(exhausted)
+    assert [r.visit_id for r in cands.collect()] == ["FAC001-err"]  # ok, skipped and exhausted rows are not retried
+    # The endpoint recovers: retrying the masked text now succeeds. (The FAILME marker is in the masked note too.)
+    retried = {r.visit_id: r for r in retry_rows(cands, FakeAi(fail_marker=None)).collect()}
+    assert retried["FAC001-err"].ai_status == "ok" and retried["FAC001-err"].suggested_esi == 1
+    assert retry_rows(cands, FakeAi()).columns == table_def("silver", "triage_notes").column_names

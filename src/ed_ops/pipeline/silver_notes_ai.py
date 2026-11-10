@@ -7,15 +7,19 @@ ai_backfill_days are stored without text (ai_status = 'skipped'): regex alone ca
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import reduce
+import uuid
 
-from pyspark.sql import Column, DataFrame
+from pyspark.sql import Column, DataFrame, SparkSession
 from pyspark.sql import functions as F
+from pyspark.sql.streaming import StreamingQuery
 
-from ed_ops.ai import AiFunctions
+from ed_ops.ai import AiFunctions, DatabricksAi
+from ed_ops.config import Config
 from ed_ops.delta import conform, table_def
 from ed_ops.pipeline.silver_visits import validate_events
+from ed_ops.timeutil import utcnow
 
 PHI_PATTERNS = (
     r"\b\d{3}[-.\s]\d{3}[-.\s]\d{4}\b",  # phone
@@ -158,3 +162,76 @@ def notes_rows(events: DataFrame, ai: AiFunctions, enrich_since: datetime) -> Da
     old = skipped_rows(events.filter(F.col("event_ts") < since))
     rows = recent.unionByName(old).withColumn("ai_attempts", F.lit(1)).withColumn("processed_at", F.current_timestamp())
     return conform(rows, table_def("silver", "triage_notes"))
+
+
+def notes_merge_sql(target: str, source_view: str) -> str:
+    """Insert new notes; update existing ones only while they are not 'ok' (a success is never overwritten)."""
+    cols = table_def("silver", "triage_notes").column_names
+    updates = ", ".join(f"t.{c} = s.{c}" for c in cols if c not in NOTE_KEYS and c != "ai_attempts")
+    return (
+        f"MERGE INTO {target} AS t USING {source_view} AS s\n"
+        "ON t.facility_id = s.facility_id AND t.visit_id = s.visit_id\n"
+        "WHEN MATCHED AND (t.ai_status IS NULL OR t.ai_status <> 'ok') THEN UPDATE SET "
+        f"{updates}, t.ai_attempts = coalesce(t.ai_attempts, 0) + 1\n"
+        f"WHEN NOT MATCHED THEN INSERT ({', '.join(cols)}) VALUES ({', '.join('s.' + c for c in cols)})"
+    )
+
+
+def merge_notes(rows: DataFrame, cfg: Config) -> None:
+    spark = rows.sparkSession
+    view = f"triage_notes_src_{uuid.uuid4().hex[:8]}"
+    rows.createOrReplaceTempView(view)
+    try:
+        spark.sql(notes_merge_sql(cfg.table("silver", "triage_notes"), view))
+    finally:
+        spark.catalog.dropTempView(view)
+
+
+def process_notes_batch(batch_df: DataFrame, cfg: Config, ai: AiFunctions) -> None:
+    spark = batch_df.sparkSession
+    events = triage_events(batch_df, spark.table(cfg.table("ref", "facility")).select("facility_id"))
+    if events.isEmpty():
+        return
+    merge_notes(notes_rows(events, ai, utcnow() - timedelta(days=cfg.ai_backfill_days)), cfg)
+
+
+def start_silver_notes_ai(spark: SparkSession, cfg: Config, available_now: bool = False) -> StreamingQuery:
+    endpoint = cfg.llm_endpoint
+    writer = (
+        spark.readStream.table(cfg.table("bronze", "ed_events"))
+        .writeStream.foreachBatch(lambda df, _batch_id: process_notes_batch(df, cfg, DatabricksAi(endpoint)))
+        .option("checkpointLocation", cfg.checkpoint("silver_notes_ai"))
+    )
+    writer = writer.trigger(availableNow=True) if available_now else writer.trigger(processingTime="60 seconds")
+    return writer.start()
+
+
+def retry_candidates(notes: DataFrame) -> DataFrame:
+    return notes.filter(
+        F.col("ai_status").isin("error", "parse_error")
+        & (F.col("ai_attempts") < MAX_AI_ATTEMPTS)
+        & F.col("note_masked").isNotNull()
+    ).select(*NOTE_KEYS, "triage_ts", "esi_level", "note_masked", "chief_complaint_masked", "residual_phi_flag")
+
+
+def retry_rows(candidates: DataFrame, ai: AiFunctions) -> DataFrame:
+    rows = enrich_stage(candidates, ai).withColumn("ai_attempts", F.lit(1)).withColumn("processed_at", F.current_timestamp())
+    return conform(rows, table_def("silver", "triage_notes"))
+
+
+def ai_retry_tick(spark: SparkSession, cfg: Config, ai: AiFunctions) -> None:
+    candidates = retry_candidates(spark.table(cfg.table("silver", "triage_notes")))
+    if candidates.isEmpty():
+        return
+    merge_notes(retry_rows(candidates, ai), cfg)
+
+
+def start_ai_retry(spark: SparkSession, cfg: Config) -> StreamingQuery:
+    endpoint = cfg.llm_endpoint
+    return (
+        spark.readStream.format("rate").option("rowsPerSecond", 1).load()
+        .writeStream.foreachBatch(lambda df, _batch_id: ai_retry_tick(df.sparkSession, cfg, DatabricksAi(endpoint)))
+        .trigger(processingTime=f"{cfg.ai_retry_minutes} minutes")
+        .option("checkpointLocation", cfg.checkpoint("ai_retry_sweep"))
+        .start()
+    )

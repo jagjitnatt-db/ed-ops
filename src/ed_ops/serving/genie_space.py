@@ -33,10 +33,14 @@ def build_serialized_space(cfg: Config, doc: dict) -> dict:
         "data_sources": {"tables": [{"identifier": t} for t in tables]},
         "instructions": {
             "text_instructions": [{"id": _id("text", "0"), "content": [_render(doc["instructions"], cfg)]}],
-            "example_question_sqls": [
-                {"id": _id("example", e["question"]), "question": [e["question"]], "sql": [_render(e["sql"], cfg).strip()]}
-                for e in doc["examples"]
-            ],
+            # Genie's import rejects example_question_sqls that are not sorted by id.
+            "example_question_sqls": sorted(
+                (
+                    {"id": _id("example", e["question"]), "question": [e["question"]], "sql": [_render(e["sql"], cfg).strip()]}
+                    for e in doc["examples"]
+                ),
+                key=lambda e: e["id"],
+            ),
         },
     }
 

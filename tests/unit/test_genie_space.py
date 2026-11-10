@@ -28,6 +28,7 @@ def test_serialized_space_shape():
         sql = "".join(e["sql"])
         assert "{" not in sql and "hls_jagjit_lb_playground_catalog.ed_" in sql
     assert len({e["id"] for e in examples}) == 10
+    assert [e["id"] for e in examples] == sorted(e["id"] for e in examples)  # Genie rejects unsorted ids
     assert build_serialized_space(CFG, load_space_doc()) == s  # deterministic ids
 
 

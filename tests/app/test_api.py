@@ -63,6 +63,12 @@ class FakeRepository:
         return [{"facility_id": "FAC001", "facility_name": "FAC001 Hospital", "hour": NOW, "gedwin": 2.9},
                 {"facility_id": "FAC002", "facility_name": "FAC002 Hospital", "hour": NOW, "gedwin": None}]
 
+    def network_history(self, hours, bucket_minutes):
+        self._call()
+        self.last_bucket = (hours, bucket_minutes)
+        return [{"bucket": NOW, "census": 512, "d2p_median_min": 31.5, "waiting_now_n": 40, "longest_current_wait_min": 95.0,
+                 "boarders_n": 61, "lwbs_rate_24h": 0.03, "crowded_n": 9}]
+
     def data_age_seconds(self):
         self._call()
         return self.age
@@ -164,3 +170,16 @@ def test_definitions():
     d = client().get("/api/definitions").json()
     assert d["bands"]["gedwin"] == {"busy": 2.06, "crowded": 2.34}
     assert any("natural log" in a for a in d["assumptions"])
+
+
+@pytest.mark.parametrize("hours,bucket", [(6, 15), (24, 60), (168, 360)])
+def test_network_history_buckets_by_range(hours, bucket):
+    repo = FakeRepository()
+    body = client(repo).get(f"/api/network/history?hours={hours}").json()
+    assert body["bucket_minutes"] == bucket and repo.last_bucket == (hours, bucket)
+    assert body["buckets"][0]["census"] == 512 and body["buckets"][0]["crowded_n"] == 9
+
+
+def test_network_history_rejects_other_ranges():
+    assert client().get("/api/network/history?hours=12").status_code == 422
+

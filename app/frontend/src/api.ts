@@ -20,7 +20,10 @@ export type Summary = { counts: Record<Band, number>; facilities: number; census
 export type Health = { status: "ok" | "delayed" | "unavailable"; data_age_seconds: number | null };
 export type Point = { snapshot_ts: string; gedwin: number | null; edwin: number | null; nedocs: number | null;
   d2p_median_min: number | null; d2p_p90_min: number | null; d2p_sample_n: number; census: number;
-  n_esi1: number; n_esi2: number; n_esi3: number; n_esi4: number; n_esi5: number; n_untriaged: number };
+  n_esi1: number; n_esi2: number; n_esi3: number; n_esi4: number; n_esi5: number; n_untriaged: number;
+  boarders_n: number; waiting_now_n: number; longest_current_wait_min: number | null; lwbs_rate_24h: number | null };
+export type NetworkBucket = { bucket: string; census: number; d2p_median_min: number | null; waiting_now_n: number;
+  longest_current_wait_min: number | null; boarders_n: number; lwbs_rate_24h: number | null; crowded_n: number };
 export type Patient = { visit_id: string; status: string; esi_level: number | null; suggested_esi: number | null;
   undertriage_flag: boolean | null; complaint_category: string | null; minutes_in_ed: number; minutes_waiting: number;
   arrival_mode: string; on_vent: boolean };
@@ -47,6 +50,7 @@ export const api = {
   history: (id: string, hours: number) => request<{ points: Point[] }>(`/api/facilities/${id}/history?hours=${hours}`),
   board: (id: string) => request<{ patients: Patient[] }>(`/api/facilities/${id}/board`),
   heatmap: () => request<{ cells: Cell[] }>("/api/heatmap"),
+  networkHistory: (hours: number) => request<{ bucket_minutes: number; buckets: NetworkBucket[] }>(`/api/network/history?hours=${hours}`),
   definitions: () => request<Definitions>("/api/definitions"),
   ask: (question: string, conversation_id?: string) =>
     request<{ conversation_id: string; message_id: string }>("/api/genie/messages", {

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import statistics
 from pathlib import Path
 from typing import Callable
@@ -15,6 +16,9 @@ from backend.cache import TtlCache
 from backend.definitions import DEFINITIONS, band
 from backend.settings import Settings, load_settings
 
+# Cockpit range toggle -> bar width: 6 h in 15-min bars, 24 h hourly, 7 days in 6-hour bars (24-28 bars each).
+RANGE_BUCKET_MINUTES = {6: 15, 24: 60, 168: 360}
+log = logging.getLogger("ed_ops.app")
 DEFAULT_STATIC = Path(__file__).resolve().parents[1] / "frontend" / "dist"
 
 
@@ -64,6 +68,7 @@ def create_app(repository=None, genie=None, settings: Settings | None = None, st
         try:
             return cache.get(key, fn)
         except Exception as exc:  # Lakebase unreachable, suspended or misconfigured
+            log.exception("data query %s failed", key)
             raise HTTPException(status_code=503, detail=f"data unavailable: {type(exc).__name__}") from exc
 
     @app.get("/api/health")
@@ -94,6 +99,14 @@ def create_app(repository=None, genie=None, settings: Settings | None = None, st
             }
 
         return data("summary", build)
+
+    @app.get("/api/network/history")
+    def network_history(hours: int = Query(24)):
+        if hours not in RANGE_BUCKET_MINUTES:
+            raise HTTPException(status_code=422, detail=f"hours must be one of {sorted(RANGE_BUCKET_MINUTES)}")
+        minutes = RANGE_BUCKET_MINUTES[hours]
+        rows = data(f"network_history:{hours}", lambda: repo().network_history(hours, minutes))
+        return {"bucket_minutes": minutes, "buckets": rows}
 
     @app.get("/api/facilities")
     def facilities():

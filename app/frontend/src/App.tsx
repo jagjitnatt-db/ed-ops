@@ -1,14 +1,10 @@
 import { useState } from "react";
 import { api, usePolling } from "./api";
 import Banner from "./components/Banner";
-import BubbleChart from "./components/BubbleChart";
+import Cockpit from "./components/Cockpit";
 import Definitions from "./components/Definitions";
 import FacilityDetail from "./components/FacilityDetail";
-import FacilityTable from "./components/FacilityTable";
 import GeniePanel from "./components/GeniePanel";
-import Heatmap from "./components/Heatmap";
-import KpiTiles from "./components/KpiTiles";
-import RankedBar from "./components/RankedBar";
 
 export const TZ = "America/Chicago";
 const POLL_MS = 30_000;
@@ -20,35 +16,31 @@ export default function App() {
   const health = usePolling(api.health, POLL_MS);
   const summary = usePolling(api.summary, POLL_MS);
   const facilities = usePolling(api.facilities, POLL_MS);
-  const heatmap = usePolling(api.heatmap, POLL_MS);
   const open = (id: string) => setView({ page: "facility", id });
-  const rows = facilities.data?.facilities ?? [];
 
   return (
-    <div className="app">
-      <header className="topbar">
-        <h1 onClick={() => setView({ page: "overview" })}>ED Crowding Command Center</h1>
-        <nav>
-          <button onClick={() => setView({ page: "overview" })}>Network</button>
-          <button onClick={() => setView({ page: "definitions" })}>Definitions</button>
-          <button className="primary" onClick={() => setGenieOpen(true)}>Ask Genie</button>
-        </nav>
-      </header>
-      <Banner health={health.data} healthError={health.error} summary={summary.data} />
-      {view.page === "overview" && (
-        <main>
-          <KpiTiles summary={summary.data} />
-          {facilities.error && <p className="error">Facilities unavailable: {facilities.error}</p>}
-          <section className="grid2">
-            <RankedBar facilities={rows} onSelect={open} />
-            <BubbleChart facilities={rows} onSelect={open} />
-          </section>
-          <Heatmap cells={heatmap.data?.cells ?? []} tz={TZ} />
-          <FacilityTable facilities={rows} onSelect={open} />
-        </main>
-      )}
-      {view.page === "facility" && <FacilityDetail id={view.id} tz={TZ} onBack={() => setView({ page: "overview" })} />}
-      {view.page === "definitions" && <Definitions />}
+    <div className="shell">
+      <nav className="rail" aria-label="Main">
+        <div className="rail-logo" title="ED Ops">ED</div>
+        <button className={view.page !== "definitions" ? "active" : undefined} onClick={() => setView({ page: "overview" })} title="Network">
+          <span className="rail-icon">▦</span><span>Network</span>
+        </button>
+        <button className={view.page === "definitions" ? "active" : undefined} onClick={() => setView({ page: "definitions" })} title="Definitions">
+          <span className="rail-icon">?</span><span>Definitions</span>
+        </button>
+        <button onClick={() => setGenieOpen(true)} title="Ask Genie">
+          <span className="rail-icon">✦</span><span>Ask Genie</span>
+        </button>
+      </nav>
+      <div className="content">
+        <Banner health={health.data} healthError={health.error} summary={summary.data} />
+        {facilities.error && view.page === "overview" && <p className="error">Facilities unavailable: {facilities.error}</p>}
+        {view.page === "overview" && (
+          <Cockpit summary={summary.data} facilities={facilities.data?.facilities ?? []} tz={TZ} onOpen={open} />
+        )}
+        {view.page === "facility" && <FacilityDetail id={view.id} tz={TZ} onBack={() => setView({ page: "overview" })} />}
+        {view.page === "definitions" && <Definitions />}
+      </div>
       <GeniePanel open={genieOpen} onClose={() => setGenieOpen(false)} />
     </div>
   );

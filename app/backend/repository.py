@@ -22,6 +22,7 @@ class Repository(Protocol):
     def board(self, facility_id: str) -> list[dict]: ...
     def sparklines(self, hours: int) -> dict[str, list]: ...
     def heatmap(self, hours: int) -> list[dict]: ...
+    def network_history(self, hours: int, bucket_minutes: int) -> list[dict]: ...
     def data_age_seconds(self) -> float | None: ...
 
 
@@ -70,7 +71,7 @@ class LakebaseRepository:
     def history(self, facility_id: str, hours: int) -> list[dict]:
         return self._all(
             "SELECT snapshot_ts, gedwin, edwin, nedocs, d2p_median_min, d2p_p90_min, d2p_sample_n, census, n_esi1, n_esi2, "
-            "n_esi3, n_esi4, n_esi5, n_untriaged, boarders_n, occupancy_ratio "
+            "n_esi3, n_esi4, n_esi5, n_untriaged, boarders_n, occupancy_ratio, waiting_now_n, longest_current_wait_min, lwbs_rate_24h "
             f"FROM {self.s}.facility_snapshot_5min WHERE facility_id = %s AND snapshot_ts > now() - make_interval(hours => %s) "
             "ORDER BY snapshot_ts",
             (facility_id, hours),
@@ -100,6 +101,23 @@ class LakebaseRepository:
             f"FROM {self.s}.facility_snapshot_5min s JOIN {self.s}.facility f USING (facility_id) "
             "WHERE s.snapshot_ts > now() - make_interval(hours => %s) GROUP BY 1, 2, 3 ORDER BY 2, 3",
             (hours,),
+        )
+
+    def network_history(self, hours: int, bucket_minutes: int) -> list[dict]:
+        """Network totals per 5-minute snapshot, then averaged per bucket (longest wait: the bucket maximum)."""
+        return self._all(
+            "WITH snap AS ("
+            "  SELECT snapshot_ts, sum(census) AS census, percentile_cont(0.5) WITHIN GROUP (ORDER BY d2p_median_min) AS d2p_median_min, "
+            "         sum(waiting_now_n) AS waiting_now_n, max(longest_current_wait_min) AS longest_current_wait_min, "
+            "         sum(boarders_n) AS boarders_n, avg(lwbs_rate_24h) AS lwbs_rate_24h, "
+            "         count(*) FILTER (WHERE gedwin_band = 'Crowded') AS crowded_n "
+            f"  FROM {self.s}.facility_snapshot_5min WHERE snapshot_ts > now() - make_interval(hours => %s) GROUP BY snapshot_ts) "
+            "SELECT date_bin(make_interval(mins => %s), snapshot_ts, TIMESTAMP '2000-01-01') AS bucket, "
+            "       round(avg(census))::int AS census, avg(d2p_median_min) AS d2p_median_min, round(avg(waiting_now_n))::int AS waiting_now_n, "
+            "       max(longest_current_wait_min) AS longest_current_wait_min, round(avg(boarders_n))::int AS boarders_n, "
+            "       avg(lwbs_rate_24h) AS lwbs_rate_24h, round(avg(crowded_n))::int AS crowded_n "
+            "FROM snap GROUP BY 1 ORDER BY 1",
+            (hours, bucket_minutes),
         )
 
     def data_age_seconds(self) -> float | None:

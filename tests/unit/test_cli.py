@@ -23,9 +23,14 @@ def test_bundle_tasks_reference_existing_entry_points():
     assert [t["task_key"] for t in jobs["ed_setup"]["tasks"]] == [
         "create_objects", "seed_reference", "backfill_generate", "backfill_ingest", "backfill_gold",
     ]
-    streaming = jobs["ed_streaming"]
-    assert streaming["job_clusters"][0]["new_cluster"]["spark_version"] == "18.x-scala2.13"
-    assert streaming["job_clusters"][0]["new_cluster"]["data_security_mode"] == "USER_ISOLATION"
+    cluster = jobs["ed_streaming"]["job_clusters"][0]["new_cluster"]
+    assert cluster["spark_version"] == "18.x-aarch64-scala2.13"  # Graviton (r7gd) needs the aarch64 runtime
+    assert cluster["runtime_engine"] == "PHOTON"
+    assert cluster["data_security_mode"] == "USER_ISOLATION"
+    assert cluster["aws_attributes"]["availability"] == "ON_DEMAND"
+    assert cluster["node_type_id"] == cluster["driver_node_type_id"] == "${var.streaming_node_type}"
+    bundle = yaml.safe_load((ROOT / "databricks.yml").read_text())
+    assert bundle["variables"]["streaming_node_type"]["default"] == "r7gd.2xlarge"
     params = jobs["ed_setup"]["tasks"][0]["python_wheel_task"]["named_parameters"]
     from dataclasses import fields
 

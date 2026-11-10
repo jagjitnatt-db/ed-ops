@@ -49,17 +49,22 @@ resources:
     ed_streaming:
       name: ed-ops streaming
       description: >-
-        Always-on simulator and medallion streams on a classic DBR 18 LTS standard-access cluster:
+        Always-on simulator and medallion streams on a classic on-demand Photon DBR 18 LTS (aarch64) standard-access cluster:
         generator -> landing volume -> bronze (Auto Loader) -> silver visits -> gold crowding metrics.
       continuous:
         pause_status: ${var.streaming_pause_status}
       job_clusters:
         - job_cluster_key: streaming
           new_cluster:
-            spark_version: 18.x-scala2.13
+            spark_version: 18.x-aarch64-scala2.13
+            runtime_engine: PHOTON
             node_type_id: ${var.streaming_node_type}
+            driver_node_type_id: ${var.streaming_node_type}
             num_workers: 1
             data_security_mode: USER_ISOLATION
+            aws_attributes:
+              availability: ON_DEMAND
+              first_on_demand: 1
             spark_conf:
               spark.sql.session.timeZone: UTC
             custom_tags:

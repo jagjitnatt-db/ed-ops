@@ -42,8 +42,8 @@ variables:
     description: Prefix for Unity Catalog tag keys (ed_layer, ed_data_classification, ...); avoids clashing with existing governed tag policies. Empty uses the bare spec names.
     default: ed_
   streaming_node_type:
-    description: Node type of the classic streaming job cluster.
-    default: m5d.xlarge
+    description: Node type of the classic streaming job cluster (Graviton; on-demand, Photon).
+    default: r7gd.2xlarge
   streaming_pause_status:
     description: PAUSED or UNPAUSED for the continuous ed_streaming job.
     default: PAUSED

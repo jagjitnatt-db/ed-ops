@@ -381,6 +381,12 @@ All tables are **managed Delta**, liquid-clustered on their **MERGE keys** (appe
 
 ### 11.3 Governed tags (created by `ed_setup`)
 
+**Tag keys are namespaced** with bundle variable `tag_prefix` (default `ed_`), so the deployed keys are `ed_layer`, `ed_domain`, `ed_data_classification`, `ed_contains_phi`, `ed_data_origin`, `ed_phi_type` and `ed_deid_method` (decided 2026-11-09).
+- **Why:** the shared metastore already has account-level governed tag policies named `domain` (allowed: finance, sales, …) and `data_classification` (allowed: u-nnpi, cui, pii) that reject this solution's values. Customers will have their own.
+- **Restoring the bare names:** an empty `tag_prefix` uses the names below exactly.
+
+The rest of this spec uses the logical (unprefixed) names.
+
 | Tag | Level | Allowed values |
 |---|---|---|
 | `layer` | table | `bronze`, `silver`, `gold`, `ref`, `sim` |
@@ -398,8 +404,8 @@ Every table and column comment comes from `metadata/tables.yml`. Column comments
 ### 11.5 Automated checks (`governance/checks.py`, run in `ed_setup` and `ed_validate`)
 
 1. Every table and column in the solution's schemas has a non-empty comment.
-2. Every table has `layer`, `domain`, `data_classification`, `contains_phi`, `data_origin`.
-3. No column tagged `phi_type` exists in `gold`, `ref`, any synced table, or any table in the Genie space.
+2. Every table has `layer`, `domain`, `data_classification`, `contains_phi`, `data_origin` (with `tag_prefix` applied).
+3. **No raw PHI outside `bronze` and `sim`:** a column tagged `phi_type` *without* a `deid_method` tag may exist only in `bronze` and `sim`. De-identified columns (for example `silver.triage_notes.note_masked`, tagged `phi_type: free_text` and `deid_method: ai_mask`) are allowed in silver and in the Genie space. `gold`, `ref` and synced tables carry no `phi_type` tags at all.
 4. Every `phi_type`-tagged column outside `bronze` and `sim` also has a `deid_method` tag.
 5. **Content scan:** the PHI regex set (phone, `MRN-\d+`, full dates of birth, emails) finds no matches in any `silver`, `gold` or `ref` string column (sampled). The generator's synthetic name list is also checked against `silver.triage_notes.note_masked` to estimate the `ai_mask` miss rate.
 

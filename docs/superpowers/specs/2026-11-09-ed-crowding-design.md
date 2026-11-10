@@ -295,7 +295,7 @@ Run in this order. Everything after step 1 runs on masked text only.
 `silver.triage_notes` stores **only** `note_masked`, `chief_complaint_masked` and the derived columns; the raw text exists only in bronze.
 
 **Backfill cost control:**
-- Notes with `event_ts < now − ai_backfill_days` (default 2) get only the deterministic regex masking, with `ai_enriched = false`.
+- Notes with `event_ts < now − ai_backfill_days` (default 2) are **not stored as text**: `note_masked` and `chief_complaint_masked` are null, `ai_enriched = false`, `ai_status = 'skipped'` (decided 2026-11-09). Regex alone cannot remove names, so regex-only masking would leak PHI into silver.
 - Live notes always get the full chain.
 
 ### 9.2 Narratives (`gold_narratives`)
@@ -379,7 +379,9 @@ All tables are **managed Delta**, liquid-clustered on their **MERGE keys** (appe
 
 **Free text** (`triage_note`, `chief_complaint_text`) is masked with `ai_mask` plus the regex post-check in `silver_notes_ai` (§9.1). Its `deid_method` tag is `ai_mask`.
 
-### 11.3 Governed tags (created by `ed_setup`)
+### 11.3 Tags (regular Unity Catalog tags, applied by `ed_setup`)
+
+**Regular tags, not governed tag policies** (decided 2026-11-09). The dev account is also at its tag-policy limit. Allowed values below are a convention, enforced by the §11.5 checks rather than by policies.
 
 **Tag keys are namespaced** with bundle variable `tag_prefix` (default `ed_`), so the deployed keys are `ed_layer`, `ed_domain`, `ed_data_classification`, `ed_contains_phi`, `ed_data_origin`, `ed_phi_type` and `ed_deid_method` (decided 2026-11-09).
 - **Why:** the shared metastore already has account-level governed tag policies named `domain` (allowed: finance, sales, …) and `data_classification` (allowed: u-nnpi, cui, pii) that reject this solution's values. Customers will have their own.

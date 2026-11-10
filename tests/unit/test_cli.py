@@ -24,7 +24,7 @@ def test_bundle_tasks_reference_existing_entry_points():
         "create_objects", "seed_reference", "backfill_generate", "backfill_ingest", "backfill_gold",
     ]
     cluster = jobs["ed_streaming"]["job_clusters"][0]["new_cluster"]
-    assert cluster["spark_version"] == "18.x-aarch64-scala2.13"  # Graviton (r7gd) needs the aarch64 runtime
+    assert cluster["spark_version"] == "18.x-scala2.13"  # Databricks picks the ARM build for Graviton nodes itself
     assert cluster["runtime_engine"] == "PHOTON"
     assert cluster["data_security_mode"] == "USER_ISOLATION"
     assert cluster["aws_attributes"]["availability"] == "ON_DEMAND"

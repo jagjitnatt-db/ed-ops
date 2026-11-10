@@ -2,17 +2,24 @@ import type { ApexOptions } from "apexcharts";
 import { useState } from "react";
 import Chart from "react-apexcharts";
 import { api, usePolling } from "../api";
-import { BAND_COLORS, EDWIN, GEDWIN, LOW_SAMPLE, NEUTRAL, edwinBand, fmt, gedwinBand, isLowSample, nedocsLabel, pct } from "../lib/bands";
+import { BAND_COLORS, LOW_SAMPLE, edwinBand, fmt, gedwinBand, isLowSample, nedocsLabel, pct } from "../lib/bands";
+import { TREND_SERIES, trendLineOptions } from "../lib/trendChart";
 
 function Gauge({ label, value, max, color, text }: { label: string; value: number | null; max: number; color: string; text: string }) {
   const options: ApexOptions = {
     chart: { type: "radialBar", sparkline: { enabled: true } },
     colors: [color],
-    plotOptions: { radialBar: { startAngle: -110, endAngle: 110, dataLabels: { name: { show: true, offsetY: 20 }, value: { offsetY: -15, formatter: () => text } } } },
+    // Only the value sits inside the arc; the score name is a caption below the gauge so it never overlaps the arc.
+    plotOptions: { radialBar: { startAngle: -110, endAngle: 110, dataLabels: { name: { show: false }, value: { offsetY: 0, fontSize: "22px", formatter: () => text } } } },
     labels: [label],
   };
   const percent = value === null ? 0 : Math.max(0, Math.min(100, (value / max) * 100));
-  return <div className="gauge"><Chart type="radialBar" height={200} options={options} series={[percent]} /></div>;
+  return (
+    <div className="gauge">
+      <Chart type="radialBar" height={200} options={options} series={[percent]} />
+      <div className="gauge-label" style={{ color }}>{label}</div>
+    </div>
+  );
 }
 
 export default function FacilityDetail({ id, tz, onBack }: { id: string; tz: string; onBack: () => void }) {
@@ -27,15 +34,7 @@ export default function FacilityDetail({ id, tz, onBack }: { id: string; tz: str
   const band = gedwinBand(f.gedwin);
   const low = isLowSample(f.d2p_sample_n);
   const time = { type: "datetime" as const, labels: { datetimeUTC: false, format: hours > 24 ? "dd MMM" : "HH:mm" } };
-  const lineOptions: ApexOptions = {
-    chart: { type: "line", toolbar: { show: false } }, stroke: { width: 2 }, colors: [NEUTRAL, "#6A1B9A", BAND_COLORS.Crowded],
-    xaxis: time, yaxis: [{ title: { text: "minutes" } }, { opposite: true, title: { text: "gEDWIN" } }],
-    annotations: { yaxis: [
-      { y: GEDWIN.busy, yAxisIndex: 1, borderColor: BAND_COLORS.Busy, label: { text: "Busy" } },
-      { y: GEDWIN.crowded, yAxisIndex: 1, borderColor: BAND_COLORS.Crowded, label: { text: "Crowded" } },
-    ] },
-    tooltip: { x: { format: "dd MMM HH:mm" } },
-  };
+  const lineOptions = trendLineOptions(hours);
   const ts = (p: { snapshot_ts: string }) => new Date(p.snapshot_ts).getTime();
   const pt = (p: { snapshot_ts: string }, y: number | null): [number, number | null] => [ts(p), y];
   const areaOptions: ApexOptions = {
@@ -79,9 +78,9 @@ export default function FacilityDetail({ id, tz, onBack }: { id: string; tz: str
         <h2>Trends <button onClick={() => setHours(hours === 24 ? 168 : 24)}>{hours === 24 ? "Show 7 days" : "Show 24 hours"}</button></h2>
         {points.length === 0 ? <p className="muted">No history yet.</p> : (
           <Chart type="line" height={300} options={lineOptions} series={[
-            { name: "D2P median", data: points.map((p) => pt(p, p.d2p_median_min)) },
-            { name: "D2P 90th pct", data: points.map((p) => pt(p, p.d2p_p90_min)) },
-            { name: "gEDWIN", data: points.map((p) => pt(p, p.gedwin)) },
+            { name: TREND_SERIES.median, data: points.map((p) => pt(p, p.d2p_median_min)) },
+            { name: TREND_SERIES.p90, data: points.map((p) => pt(p, p.d2p_p90_min)) },
+            { name: TREND_SERIES.gedwin, data: points.map((p) => pt(p, p.gedwin)) },
           ]} />
         )}
         {points.length > 0 && (

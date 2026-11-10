@@ -27,3 +27,12 @@ def test_conform_rejects_missing_columns(spark):
     df = spark.createDataFrame([("FAC001",)], "facility_id STRING")
     with pytest.raises(ValueError, match="missing columns"):
         conform(df, table_def("ref", "physician_roster"))
+
+
+def test_idempotent_append_options_include_checkpoint_version():
+    from ed_ops.config import Config
+    from ed_ops.delta import txn_options
+
+    assert txn_options(Config(schema_prefix="ed_", checkpoint_version=2), "quarantine", 17) == {
+        "txnAppId": "ed_quarantine_v2", "txnVersion": "17",
+    }

@@ -27,6 +27,16 @@ ed-ops-stream-generator = "ed_ops.cli:stream_generator"
 ed-ops-stream-bronze = "ed_ops.cli:stream_bronze"
 ed-ops-stream-silver-visits = "ed_ops.cli:stream_silver_visits"
 ed-ops-stream-gold-metrics = "ed_ops.cli:stream_gold_metrics"
+ed-ops-backfill-notes-ai = "ed_ops.cli:backfill_notes_ai"
+ed-ops-refresh-drivers = "ed_ops.cli:refresh_drivers"
+ed-ops-backfill-narratives = "ed_ops.cli:backfill_narratives"
+ed-ops-governance-checks = "ed_ops.cli:governance_checks"
+ed-ops-stream-notes-ai = "ed_ops.cli:stream_notes_ai"
+ed-ops-stream-ai-retry = "ed_ops.cli:stream_ai_retry"
+ed-ops-stream-narratives = "ed_ops.cli:stream_narratives"
+ed-ops-validate-golden = "ed_ops.cli:validate_golden"
+ed-ops-validate-pipeline = "ed_ops.cli:validate_pipeline"
+ed-ops-teardown-schemas = "ed_ops.cli:teardown_schemas"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ed_ops"]

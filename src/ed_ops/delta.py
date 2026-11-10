@@ -51,5 +51,14 @@ def merge_into(df: DataFrame, cfg: Config, logical: str, name: str, keys: list[s
         spark.catalog.dropTempView(view)
 
 
-def append_into(df: DataFrame, cfg: Config, logical: str, name: str) -> None:
-    conform(df, table_def(logical, name)).write.mode("append").saveAsTable(cfg.table(logical, name))
+def txn_options(cfg: Config, app: str, version: int) -> dict[str, str]:
+    """Delta idempotent-write options. The checkpoint version is part of the app id because a checkpoint reset
+    restarts micro-batch ids at 0."""
+    return {"txnAppId": f"{cfg.schema_prefix}{app}_v{cfg.checkpoint_version}", "txnVersion": str(version)}
+
+
+def append_into(df: DataFrame, cfg: Config, logical: str, name: str, txn: tuple[str, int] | None = None) -> None:
+    writer = conform(df, table_def(logical, name)).write.mode("append")
+    if txn is not None:
+        writer = writer.options(**txn_options(cfg, *txn))
+    writer.saveAsTable(cfg.table(logical, name))

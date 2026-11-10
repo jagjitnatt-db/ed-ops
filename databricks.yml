@@ -41,6 +41,18 @@ variables:
   tag_prefix:
     description: Prefix for Unity Catalog tag keys (ed_layer, ed_data_classification, ...); avoids clashing with existing governed tag policies. Empty uses the bare spec names.
     default: ed_
+  ai_backfill_days:
+    description: Triage notes newer than this many days get the full AI chain; older backfill notes are stored without text.
+    default: "2"
+  llm_endpoint:
+    description: Model serving endpoint for ai_query (ESI suggestions and narratives).
+    default: databricks-claude-sonnet-5-5
+  narrative_minutes:
+    description: Minutes between narrative refreshes.
+    default: "15"
+  ai_retry_minutes:
+    description: Minutes between AI retry sweeps.
+    default: "15"
   streaming_node_type:
     description: Node type of the classic streaming job cluster (Graviton; on-demand, Photon).
     default: r7gd.2xlarge

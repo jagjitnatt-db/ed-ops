@@ -16,6 +16,8 @@ from ed_ops.generator.stores import DeltaStore
 from ed_ops.generator.tick import advance
 from ed_ops.pipeline.bronze import start_bronze
 from ed_ops.pipeline.gold_metrics import start_gold_metrics
+from ed_ops.pipeline.gold_narratives import start_gold_narratives
+from ed_ops.pipeline.silver_notes_ai import start_ai_retry, start_silver_notes_ai
 from ed_ops.pipeline.silver_visits import start_silver_visits
 from ed_ops.timeutil import floor_to, utcnow
 
@@ -74,3 +76,15 @@ def run_silver_visits(spark: SparkSession, cfg: Config) -> None:
 
 def run_gold_metrics(spark: SparkSession, cfg: Config) -> None:
     start_gold_metrics(spark, cfg).awaitTermination()
+
+
+def run_notes_ai(spark: SparkSession, cfg: Config) -> None:
+    start_silver_notes_ai(spark, cfg).awaitTermination()
+
+
+def run_ai_retry(spark: SparkSession, cfg: Config) -> None:
+    start_ai_retry(spark, cfg).awaitTermination()
+
+
+def run_narratives(spark: SparkSession, cfg: Config) -> None:
+    start_gold_narratives(spark, cfg).awaitTermination()

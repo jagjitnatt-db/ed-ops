@@ -29,6 +29,10 @@ resources:
               checkpoint_version: ${var.checkpoint_version}
               secret_scope: ${var.secret_scope}
               tag_prefix: ${var.tag_prefix}
+              ai_backfill_days: ${var.ai_backfill_days}
+              llm_endpoint: ${var.llm_endpoint}
+              narrative_minutes: ${var.narrative_minutes}
+              ai_retry_minutes: ${var.ai_retry_minutes}
         - task_key: seed_reference
           depends_on: [{task_key: create_objects}]
           environment_key: default
@@ -45,6 +49,22 @@ resources:
           depends_on: [{task_key: backfill_ingest}]
           environment_key: default
           python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-backfill-gold, named_parameters: *common}
+        - task_key: backfill_notes_ai
+          depends_on: [{task_key: backfill_ingest}]
+          environment_key: default
+          python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-backfill-notes-ai, named_parameters: *common}
+        - task_key: refresh_drivers
+          depends_on: [{task_key: backfill_gold}]
+          environment_key: default
+          python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-refresh-drivers, named_parameters: *common}
+        - task_key: backfill_narratives
+          depends_on: [{task_key: refresh_drivers}, {task_key: backfill_notes_ai}]
+          environment_key: default
+          python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-backfill-narratives, named_parameters: *common}
+        - task_key: governance_checks
+          depends_on: [{task_key: backfill_narratives}]
+          environment_key: default
+          python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-governance-checks, named_parameters: *common}
 
     ed_streaming:
       name: ed-ops streaming
@@ -86,3 +106,15 @@ resources:
           job_cluster_key: streaming
           libraries: [{whl: ../dist/*.whl}]
           python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-stream-gold-metrics, named_parameters: *common}
+        - task_key: notes_ai
+          job_cluster_key: streaming
+          libraries: [{whl: ../dist/*.whl}]
+          python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-stream-notes-ai, named_parameters: *common}
+        - task_key: ai_retry
+          job_cluster_key: streaming
+          libraries: [{whl: ../dist/*.whl}]
+          python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-stream-ai-retry, named_parameters: *common}
+        - task_key: narratives
+          job_cluster_key: streaming
+          libraries: [{whl: ../dist/*.whl}]
+          python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-stream-narratives, named_parameters: *common}

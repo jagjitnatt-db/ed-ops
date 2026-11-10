@@ -1,0 +1,75 @@
+resources:
+  jobs:
+    ed_validate:
+      name: ed-ops validate
+      description: >-
+        End-to-end validation at small scale in ed_validate_* schemas: golden scenario on this runtime, the full batch
+        pipeline (generate, ingest, AI notes, gold, drivers, narratives), pipeline and governance assertions, teardown.
+      max_concurrent_runs: 1
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "4"
+            dependencies:
+              - ../dist/*.whl
+      tasks:
+        - task_key: validate_golden
+          environment_key: default
+          python_wheel_task:
+            package_name: ed_ops
+            entry_point: ed-ops-validate-golden
+            named_parameters: &validate
+              catalog: ${var.catalog}
+              schema_prefix: ed_validate_
+              facility_count: "5"
+              backfill_days: "1"
+              ai_backfill_days: "1"
+              tick_seconds: ${var.tick_seconds}
+              timezone: ${var.timezone}
+              seed: ${var.seed}
+              checkpoint_version: "1"
+              secret_scope: ${var.secret_scope}
+              tag_prefix: ${var.tag_prefix}
+              llm_endpoint: ${var.llm_endpoint}
+              narrative_minutes: ${var.narrative_minutes}
+              ai_retry_minutes: ${var.ai_retry_minutes}
+        - task_key: create_objects
+          environment_key: default
+          python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-create-objects, named_parameters: *validate}
+        - task_key: seed_reference
+          depends_on: [{task_key: create_objects}]
+          environment_key: default
+          python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-seed-reference, named_parameters: *validate}
+        - task_key: backfill_generate
+          depends_on: [{task_key: seed_reference}]
+          environment_key: default
+          python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-backfill-generate, named_parameters: *validate}
+        - task_key: backfill_ingest
+          depends_on: [{task_key: backfill_generate}]
+          environment_key: default
+          python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-backfill-ingest, named_parameters: *validate}
+        - task_key: backfill_gold
+          depends_on: [{task_key: backfill_ingest}]
+          environment_key: default
+          python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-backfill-gold, named_parameters: *validate}
+        - task_key: backfill_notes_ai
+          depends_on: [{task_key: backfill_ingest}]
+          environment_key: default
+          python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-backfill-notes-ai, named_parameters: *validate}
+        - task_key: refresh_drivers
+          depends_on: [{task_key: backfill_gold}]
+          environment_key: default
+          python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-refresh-drivers, named_parameters: *validate}
+        - task_key: backfill_narratives
+          depends_on: [{task_key: refresh_drivers}, {task_key: backfill_notes_ai}]
+          environment_key: default
+          python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-backfill-narratives, named_parameters: *validate}
+        - task_key: validate_pipeline
+          depends_on: [{task_key: backfill_narratives}, {task_key: validate_golden}]
+          environment_key: default
+          python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-validate-pipeline, named_parameters: *validate}
+        - task_key: teardown
+          depends_on: [{task_key: validate_pipeline}]
+          run_if: ALL_DONE
+          environment_key: default
+          python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-teardown-schemas, named_parameters: *validate}

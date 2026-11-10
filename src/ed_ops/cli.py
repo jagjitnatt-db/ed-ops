@@ -10,6 +10,7 @@ from typing import Callable
 from pyspark.sql import SparkSession
 
 from ed_ops import setup, streaming
+from ed_ops.validation import tasks as validation
 from ed_ops.config import Config, parse_config
 
 
@@ -59,3 +60,43 @@ def stream_silver_visits() -> None:
 
 def stream_gold_metrics() -> None:
     _run(streaming.run_gold_metrics)
+
+
+def backfill_notes_ai() -> None:
+    _run(setup.backfill_notes_ai)
+
+
+def refresh_drivers() -> None:
+    _run(setup.refresh_drivers)
+
+
+def backfill_narratives() -> None:
+    _run(setup.backfill_narratives)
+
+
+def governance_checks() -> None:
+    _run(setup.governance_checks)
+
+
+def stream_notes_ai() -> None:
+    _run(streaming.run_notes_ai)
+
+
+def stream_ai_retry() -> None:
+    _run(streaming.run_ai_retry)
+
+
+def stream_narratives() -> None:
+    _run(streaming.run_narratives)
+
+
+def validate_golden() -> None:
+    _run(validation.validate_golden)
+
+
+def validate_pipeline() -> None:
+    _run(validation.validate_pipeline)
+
+
+def teardown_schemas() -> None:
+    _run(validation.teardown_schemas)

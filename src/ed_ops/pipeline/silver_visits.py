@@ -103,13 +103,13 @@ def visits_merge_sql(target: str, source_view: str) -> str:
     )
 
 
-def process_batch(batch_df: DataFrame, cfg: Config) -> None:
+def process_batch(batch_df: DataFrame, batch_id: int, cfg: Config) -> None:
     spark = batch_df.sparkSession
     events = batch_df.dropDuplicates(["event_id"])
     facility_ids = spark.table(cfg.table("ref", "facility")).select("facility_id")
     valid, rejected = validate_events(events, facility_ids)
     if not rejected.isEmpty():
-        append_into(quarantine_rows(rejected), cfg, "silver", "ed_events_quarantine")
+        append_into(quarantine_rows(rejected), cfg, "silver", "ed_events_quarantine", txn=("quarantine", batch_id))
     view = f"silver_visits_src_{uuid.uuid4().hex[:8]}"
     fold_events(deidentify(valid, salt_expr(cfg))).createOrReplaceTempView(view)
     try:
@@ -121,7 +121,7 @@ def process_batch(batch_df: DataFrame, cfg: Config) -> None:
 def start_silver_visits(spark: SparkSession, cfg: Config, available_now: bool = False) -> StreamingQuery:
     writer = (
         spark.readStream.table(cfg.table("bronze", "ed_events"))
-        .writeStream.foreachBatch(lambda df, _batch_id: process_batch(df, cfg))
+        .writeStream.foreachBatch(lambda df, batch_id: process_batch(df, batch_id, cfg))
         .option("checkpointLocation", cfg.checkpoint("silver_visits"))
     )
     writer = writer.trigger(availableNow=True) if available_now else writer.trigger(processingTime="30 seconds")

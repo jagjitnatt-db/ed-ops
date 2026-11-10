@@ -111,3 +111,19 @@ def test_spark_ddl_parses(spark):
     t = load_catalog_def().table("gold", "facility_snapshot_5min")
     df = spark.createDataFrame([], t.spark_ddl())
     assert df.columns == t.column_names
+
+
+def test_narrative_tables_defined():
+    cat = load_catalog_def()
+    fac = cat.table("gold", "facility_narrative")
+    net = cat.table("gold", "network_narrative")
+    assert fac.primary_key == ("facility_id",) and fac.cdf and fac.cluster_by == ("facility_id",)
+    assert net.primary_key == ("network_id",) and net.cdf
+    assert fac.column_names == [
+        "facility_id", "snapshot_ts", "gedwin_band", "headline", "explanation", "recommended_actions",
+        "top_drivers", "input_json", "model", "generated_at",
+    ]
+    assert net.column_names == [
+        "network_id", "snapshot_ts", "crowded_n", "busy_n", "active_n", "headline", "explanation",
+        "crowded_facilities", "doing_well_facilities", "recommended_actions", "input_json", "model", "generated_at",
+    ]

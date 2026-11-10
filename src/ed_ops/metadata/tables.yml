@@ -310,3 +310,44 @@ tables:
       - {name: last_emitted_ts, type: TIMESTAMP, comment: "Events are emitted up to (including) this time, UTC."}
       - {name: live_started_ts, type: TIMESTAMP, comment: "First live (streaming) tick, UTC; anchors the live surge scenario."}
       - {name: updated_at, type: TIMESTAMP, comment: "When the state was last saved, UTC."}
+
+  - schema: gold
+    name: facility_narrative
+    comment: "AI-written plain-English crowding status per facility. ai_query sees only computed metrics and drivers; refreshed every narrative_minutes. A refresh that fails to parse keeps the previous narrative."
+    primary_key: [facility_id]
+    cluster_by: [facility_id]
+    cdf: true
+    tags: {data_classification: internal, contains_phi: "false"}
+    columns:
+      - {name: facility_id, type: STRING, nullable: false, comment: "Facility identifier (FACnnn)."}
+      - {name: snapshot_ts, type: TIMESTAMP, comment: "facility_current snapshot the narrative describes, UTC."}
+      - {name: gedwin_band, type: STRING, comment: "Headline crowding band at snapshot_ts."}
+      - {name: headline, type: STRING, comment: "One-line status (at most 12 words)."}
+      - {name: explanation, type: STRING, comment: "Why the ED is in this state (at most 60 words), citing only computed metrics."}
+      - {name: recommended_actions, type: "ARRAY<STRING>", comment: "Up to 3 suggested operational actions."}
+      - {name: top_drivers, type: "ARRAY<STRUCT<driver: STRING, value: DOUBLE, baseline: DOUBLE, z: DOUBLE>>", comment: "Drivers given to the model (copy of facility_current.top_drivers)."}
+      - {name: input_json, type: STRING, comment: "Exact JSON sent to the model, so every claim in the narrative can be audited."}
+      - {name: model, type: STRING, comment: "Model serving endpoint that wrote the narrative."}
+      - {name: generated_at, type: TIMESTAMP, comment: "When the narrative was generated, UTC."}
+
+  - schema: gold
+    name: network_narrative
+    comment: "AI-written network-wide summary of which facilities are crowded and why, and which are doing well. One row (network_id = 'NETWORK'); the previous summary is kept when a refresh fails to parse."
+    primary_key: [network_id]
+    cluster_by: [network_id]
+    cdf: true
+    tags: {data_classification: internal, contains_phi: "false"}
+    columns:
+      - {name: network_id, type: STRING, nullable: false, comment: "Constant NETWORK (single row)."}
+      - {name: snapshot_ts, type: TIMESTAMP, comment: "Latest facility_current snapshot summarised, UTC."}
+      - {name: crowded_n, type: INT, comment: "Facilities with gedwin_band = Crowded."}
+      - {name: busy_n, type: INT, comment: "Facilities with gedwin_band = Busy."}
+      - {name: active_n, type: INT, comment: "Facilities with gedwin_band = Active."}
+      - {name: headline, type: STRING, comment: "One-line network status (at most 15 words)."}
+      - {name: explanation, type: STRING, comment: "Which facilities are crowded and why, and which are doing well (at most 80 words)."}
+      - {name: crowded_facilities, type: "ARRAY<STRING>", comment: "Facility names the model lists as crowded (only gEDWIN Crowded facilities qualify)."}
+      - {name: doing_well_facilities, type: "ARRAY<STRING>", comment: "Facility names the model lists as doing well."}
+      - {name: recommended_actions, type: "ARRAY<STRING>", comment: "Up to 3 network-level actions."}
+      - {name: input_json, type: STRING, comment: "Exact JSON sent to the model."}
+      - {name: model, type: STRING, comment: "Model serving endpoint that wrote the summary."}
+      - {name: generated_at, type: TIMESTAMP, comment: "When the summary was generated, UTC."}

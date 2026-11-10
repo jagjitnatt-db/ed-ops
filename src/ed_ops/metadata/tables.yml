@@ -176,7 +176,7 @@ tables:
       - {name: boarder_share, type: DOUBLE, comment: "boarders_n / census."}
       - {name: high_acuity_share, type: DOUBLE, comment: "(n_esi1 + n_esi2) / census."}
       - {name: undertriage_flags_n, type: INT, comment: "Census patients whose AI-suggested ESI is at least 2 levels more acute than the nurse ESI (0 until AI enrichment runs)."}
-      - {name: top_drivers, type: "ARRAY<STRUCT<driver: STRING, value: DOUBLE, baseline: DOUBLE, z: DOUBLE>>", comment: "Up to 3 crowding drivers deviating most (|z| >= 1) from the facility's baseline for the same local hour, most extreme first. Drivers: occupancy_ratio, boarder_share, patients_per_attending, arrivals_1h, high_acuity_share."}
+      - {name: top_drivers, type: "ARRAY<STRUCT<driver: STRING, value: DOUBLE, baseline: DOUBLE, z: DOUBLE>>", comment: "Up to 3 crowding drivers deviating most (|z| >= 1) from the facility's baseline for the same local hour, most extreme first. Drivers: occupancy_ratio, boarder_share, patients_per_attending, arrival_surge_ratio (value = arrivals_1h / local-hour mean, baseline 1.0, z from arrivals_1h), high_acuity_share."}
       - {name: dq_flags, type: "ARRAY<STRING>", comment: "Data-quality flags: no_attending_on_duty, census_exceeds_beds."}
       - {name: computed_at, type: TIMESTAMP, comment: "When the row was computed, UTC."}
 

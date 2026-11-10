@@ -28,9 +28,11 @@ def test_top_drivers_ranked_by_absolute_z(spark):
     )
     out = {r["snapshot_ts"]: r for r in add_drivers(current, baselines, TZ).collect()}
     top = out[datetime(2026, 11, 9, 18)]["top_drivers"]
-    assert [d["driver"] for d in top] == ["occupancy_ratio", "arrivals_1h", "high_acuity_share"]
+    assert [d["driver"] for d in top] == ["occupancy_ratio", "arrival_surge_ratio", "high_acuity_share"]
     assert top[0]["z"] == pytest.approx(3.0)
     assert top[0]["baseline"] == pytest.approx(0.5) and top[0]["value"] == pytest.approx(0.8)
+    surge = top[1]
+    assert surge["value"] == pytest.approx(16 / 12) and surge["baseline"] == 1.0 and surge["z"] == pytest.approx(2.0)
     assert out[datetime(2026, 11, 9, 18)]["arrival_surge_ratio"] == pytest.approx(16 / 12)
     assert out[datetime(2026, 11, 9, 3)]["top_drivers"] == []
     assert out[datetime(2026, 11, 9, 3)]["arrival_surge_ratio"] is None

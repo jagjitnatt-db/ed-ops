@@ -38,3 +38,12 @@ def test_parse_config_floats():
 def test_tick_seconds_must_be_multiple_of_60():
     with pytest.raises(ValueError, match="multiple of 60"):
         Config(tick_seconds=30)
+
+
+def test_ai_and_narrative_defaults():
+    cfg = Config()
+    assert (cfg.ai_backfill_days, cfg.llm_endpoint, cfg.narrative_minutes, cfg.ai_retry_minutes) == (
+        2, "databricks-claude-sonnet-5-5", 15, 15
+    )
+    parsed, _ = parse_config(["--llm-endpoint=databricks-claude-haiku-5-5", "--ai_backfill_days=1"])
+    assert parsed.llm_endpoint == "databricks-claude-haiku-5-5" and parsed.ai_backfill_days == 1

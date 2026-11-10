@@ -131,6 +131,15 @@ def backfill_snapshots(spark: SparkSession, cfg: Config, start: datetime, end: d
     merge_into(add_drivers(window, baselines, cfg.timezone), cfg, "gold", "facility_snapshot_5min")
 
 
+def refresh_drivers(spark: SparkSession, cfg: Config) -> None:
+    """Recompute top_drivers / arrival_surge_ratio over all stored history and the current rows (idempotent)."""
+    history = spark.table(cfg.table("gold", "facility_snapshot_5min"))
+    baselines = _materialize(compute_baselines(history, cfg.timezone))
+    merge_into(add_drivers(history, baselines, cfg.timezone), cfg, "gold", "facility_snapshot_5min")
+    current = spark.table(cfg.table("gold", "facility_current"))
+    merge_into(add_drivers(current, baselines, cfg.timezone), cfg, "gold", "facility_current")
+
+
 CATCH_UP_SLACK = timedelta(minutes=5)
 
 

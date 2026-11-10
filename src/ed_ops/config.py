@@ -26,6 +26,10 @@ class Config:
     patient_pool_size: int = 50000
     secret_scope: str = "ed_ops"
     tag_prefix: str = "ed_"  # namespaces UC tag keys so they never collide with existing governed tag policies
+    ai_backfill_days: int = 2
+    llm_endpoint: str = "databricks-claude-sonnet-5-5"
+    narrative_minutes: int = 15
+    ai_retry_minutes: int = 15
 
     def __post_init__(self) -> None:
         if self.tick_seconds <= 0 or self.tick_seconds % 60 != 0:

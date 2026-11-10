@@ -44,3 +44,33 @@ def test_network_narrative_single_row(spark, current):
 
 def test_network_narrative_unparseable_yields_no_row(spark, current):
     assert network_narrative(current, FakeAi(garbage_marker="FAC001")).count() == 0
+
+
+class CountingAi(FakeAi):
+    """query() through a counting UDF, so Catalyst can duplicate it like a deterministic model call."""
+
+    def __init__(self, spark):
+        super().__init__(fail_marker=None, garbage_marker=None)
+        self.calls = spark.sparkContext.accumulator(0)
+        calls = self.calls
+
+        from pyspark.sql import functions as F
+        from pyspark.sql.types import StringType, StructField, StructType
+
+        @F.udf(StructType([StructField("result", StringType()), StructField("errorMessage", StringType())]))
+        def _q(prompt):
+            calls.add(1)
+            return ('{"headline": "h", "explanation": "e", "recommended_actions": ["a"]}', None)
+
+        self._q = _q
+
+    def query(self, column):
+        from pyspark.sql import functions as F
+
+        return self._q(F.col(column))
+
+
+def test_each_facility_reply_is_requested_exactly_once(spark, current):
+    ai = CountingAi(spark)
+    rows = facility_narratives(current, ai).collect()
+    assert len(rows) == 2 and ai.calls.value == 2

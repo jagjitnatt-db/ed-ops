@@ -19,6 +19,16 @@ RAW_PHI_LAYERS = ("bronze", "sim")
 NO_PHI_TAG_LAYERS = ("gold", "ref", "serving")
 SCAN_LAYERS = ("silver", "gold", "ref")
 MAX_AI_MASK_MISS_RATE = 0.02
+# Allowed values (spec 11.3). Regular tags have no policies, so these checks are what enforces them.
+ALLOWED_TAG_VALUES = {
+    "layer": set(LOGICAL_SCHEMAS),
+    "domain": {"emergency_department"},
+    "data_classification": {"phi", "confidential", "internal"},
+    "contains_phi": {"true", "false"},
+    "data_origin": {"synthetic"},
+    "phi_type": {"name", "mrn", "dob", "contact", "address", "free_text"},
+    "deid_method": {"redacted", "hashed", "generalized", "ai_mask"},
+}
 NAME_PATTERN = r"\b(" + "|".join(FIRST_NAMES) + r")\s+(" + "|".join(LAST_NAMES) + r")\b"
 
 
@@ -77,6 +87,27 @@ def check_phi_tags(column_tags: DataFrame, cfg: Config) -> list[Violation]:
     return out
 
 
+def _value_violation(cfg: Config, obj: str, schema: str, tag: str, value: str) -> Violation | None:
+    if not tag.startswith(cfg.tag_prefix):
+        return None
+    key = tag[len(cfg.tag_prefix):]
+    if key not in ALLOWED_TAG_VALUES:
+        return None
+    if key == "layer" and value != _layer(cfg, schema):
+        return Violation("tag_value", obj, f"{tag}={value} does not match schema layer {_layer(cfg, schema)}")
+    if value not in ALLOWED_TAG_VALUES[key]:
+        return Violation("tag_value", obj, f"{tag}={value} not in {sorted(ALLOWED_TAG_VALUES[key])}")
+    return None
+
+
+def check_tag_values(table_tags: DataFrame, column_tags: DataFrame, cfg: Config) -> list[Violation]:
+    out = [_value_violation(cfg, f"{r.schema_name}.{r.table_name}", r.schema_name, r.tag_name, r.tag_value)
+           for r in table_tags.collect()]
+    out += [_value_violation(cfg, f"{r.schema_name}.{r.table_name}.{r.column_name}", r.schema_name, r.tag_name, r.tag_value)
+            for r in column_tags.collect()]
+    return [v for v in out if v is not None]
+
+
 def phi_match_counts(df: DataFrame, columns: list[str]) -> dict[str, int]:
     if not columns:
         return {}
@@ -101,9 +132,10 @@ def run_checks(spark: SparkSession, cfg: Config, sample_rows: int = 20000) -> li
 
     tables = scoped("tables", "table_schema", "table_schema", "table_name", "comment")
     columns = scoped("columns", "table_schema", "table_schema", "table_name", "column_name", "comment")
-    table_tags = scoped("table_tags", "schema_name", "schema_name", "table_name", "tag_name")
-    column_tags = scoped("column_tags", "schema_name", "schema_name", "table_name", "column_name", "tag_name")
-    violations = check_comments(tables, columns) + check_table_tags(tables, table_tags, cfg) + check_phi_tags(column_tags, cfg)
+    table_tags = scoped("table_tags", "schema_name", "schema_name", "table_name", "tag_name", "tag_value")
+    column_tags = scoped("column_tags", "schema_name", "schema_name", "table_name", "column_name", "tag_name", "tag_value")
+    violations = (check_comments(tables, columns) + check_table_tags(tables, table_tags, cfg)
+                  + check_phi_tags(column_tags, cfg) + check_tag_values(table_tags, column_tags, cfg))
     for t in load_catalog_def().tables:
         if t.schema not in SCAN_LAYERS:
             continue

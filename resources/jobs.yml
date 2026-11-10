@@ -40,27 +40,27 @@ resources:
         - task_key: backfill_generate
           depends_on: [{task_key: seed_reference}]
           environment_key: default
-          python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-backfill-generate, named_parameters: *common}
+          python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-backfill-generate, named_parameters: {<<: *common, streaming_job_id: "${resources.jobs.ed_streaming.id}"}}
         - task_key: backfill_ingest
           depends_on: [{task_key: backfill_generate}]
           environment_key: default
-          python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-backfill-ingest, named_parameters: *common}
+          python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-backfill-ingest, named_parameters: {<<: *common, streaming_job_id: "${resources.jobs.ed_streaming.id}"}}
         - task_key: backfill_gold
-          depends_on: [{task_key: backfill_ingest}]
+          depends_on: [{task_key: backfill_notes_ai}]
           environment_key: default
-          python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-backfill-gold, named_parameters: *common}
+          python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-backfill-gold, named_parameters: {<<: *common, streaming_job_id: "${resources.jobs.ed_streaming.id}"}}
         - task_key: backfill_notes_ai
           depends_on: [{task_key: backfill_ingest}]
           environment_key: default
-          python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-backfill-notes-ai, named_parameters: *common}
+          python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-backfill-notes-ai, named_parameters: {<<: *common, streaming_job_id: "${resources.jobs.ed_streaming.id}"}}
         - task_key: refresh_drivers
           depends_on: [{task_key: backfill_gold}]
           environment_key: default
-          python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-refresh-drivers, named_parameters: *common}
+          python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-refresh-drivers, named_parameters: {<<: *common, streaming_job_id: "${resources.jobs.ed_streaming.id}"}}
         - task_key: backfill_narratives
           depends_on: [{task_key: refresh_drivers}, {task_key: backfill_notes_ai}]
           environment_key: default
-          python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-backfill-narratives, named_parameters: *common}
+          python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-backfill-narratives, named_parameters: {<<: *common, streaming_job_id: "${resources.jobs.ed_streaming.id}"}}
         - task_key: governance_checks
           depends_on: [{task_key: backfill_narratives}]
           environment_key: default

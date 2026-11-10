@@ -49,7 +49,7 @@ resources:
           environment_key: default
           python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-backfill-ingest, named_parameters: *validate}
         - task_key: backfill_gold
-          depends_on: [{task_key: backfill_ingest}]
+          depends_on: [{task_key: backfill_notes_ai}]
           environment_key: default
           python_wheel_task: {package_name: ed_ops, entry_point: ed-ops-backfill-gold, named_parameters: *validate}
         - task_key: backfill_notes_ai

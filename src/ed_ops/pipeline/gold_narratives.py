@@ -49,8 +49,13 @@ def _field(name: str) -> Column:
 
 
 def _ask(df: DataFrame, prompt: str, ai: AiFunctions, schema: str) -> DataFrame:
-    df = df.withColumn("_prompt", F.concat(F.lit(prompt), F.col("input_json"))).withColumn("_reply", ai.query("_prompt"))
-    return df.withColumn("_n", parse_json_reply(F.col("_reply.result"), schema)).filter(
+    """Call the model exactly once per row. The replies (at most one per facility) are collected before parsing and
+    filtering; otherwise predicate pushdown can copy the model call into the filter, which doubles cost and lets
+    the stored values come from a different reply than the one that passed the filter."""
+    asked = df.withColumn("_prompt", F.concat(F.lit(prompt), F.col("input_json"))).withColumn("_reply", ai.query("_prompt"))
+    asked = asked.drop("_prompt")
+    replies = df.sparkSession.createDataFrame(asked.collect(), asked.schema)
+    return replies.withColumn("_n", parse_json_reply(F.col("_reply.result"), schema)).filter(
         F.col("_n.headline").isNotNull() & F.col("_n.explanation").isNotNull()
     )
 

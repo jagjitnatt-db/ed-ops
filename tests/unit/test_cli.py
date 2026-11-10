@@ -49,6 +49,11 @@ def test_bundle_tasks_reference_existing_entry_points():
     names = {f.name for f in fields(Config)}
     for job in ("ed_setup", "ed_validate"):
         assert set(jobs[job]["tasks"][0]["python_wheel_task"]["named_parameters"]) <= names
+    for task in jobs["ed_setup"]["tasks"]:
+        if task["task_key"] not in ("create_objects", "seed_reference", "governance_checks"):
+            assert task["python_wheel_task"]["named_parameters"]["streaming_job_id"] == "${resources.jobs.ed_streaming.id}"
+    gold = next(t for t in jobs["ed_setup"]["tasks"] if t["task_key"] == "backfill_gold")
+    assert {"task_key": "backfill_notes_ai"} in gold["depends_on"]  # under-triage flags must exist before history
     validate = jobs["ed_validate"]
     params = validate["tasks"][0]["python_wheel_task"]["named_parameters"]
     assert params["schema_prefix"] == "ed_validate_" and params["facility_count"] == "5"

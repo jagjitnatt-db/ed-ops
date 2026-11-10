@@ -30,6 +30,7 @@ class Config:
     llm_endpoint: str = "databricks-claude-sonnet-5-5"
     narrative_minutes: int = 15
     ai_retry_minutes: int = 15
+    streaming_job_id: str = ""  # ed_streaming job id; ed_setup refuses AI/gold backfills while it has an active run
 
     def __post_init__(self) -> None:
         if self.tick_seconds <= 0 or self.tick_seconds % 60 != 0:

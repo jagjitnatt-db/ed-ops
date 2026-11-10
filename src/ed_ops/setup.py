@@ -37,8 +37,33 @@ def generator_live(live_started_ts: datetime | None) -> bool:
     return live_started_ts is not None
 
 
-def streaming_active(live_started_ts: datetime | None, updated_at: datetime | None, now: datetime) -> bool:
-    return generator_live(live_started_ts) and updated_at is not None and updated_at >= now - ACTIVE_WINDOW
+def heartbeat_window(tick_seconds: int) -> timedelta:
+    return max(ACTIVE_WINDOW, timedelta(seconds=3 * tick_seconds))
+
+
+def streaming_active(live_started_ts: datetime | None, updated_at: datetime | None, now: datetime,
+                     tick_seconds: int = 60) -> bool:
+    return (generator_live(live_started_ts) and updated_at is not None
+            and updated_at >= now - heartbeat_window(tick_seconds))
+
+
+def refusal_reason(job_active: bool | None, live_started_ts: datetime | None, updated_at: datetime | None,
+                   now: datetime, tick_seconds: int) -> str | None:
+    """The Jobs API is authoritative when available (it also sees notes_ai/gold running while the generator task is
+    restarting); otherwise fall back to the generator heartbeat."""
+    if job_active is not None:
+        return "ed_streaming has an active run" if job_active else None
+    if streaming_active(live_started_ts, updated_at, now, tick_seconds):
+        return f"the generator state was updated at {updated_at}"
+    return None
+
+
+def streaming_job_active(job_id: str) -> bool | None:
+    if not job_id:
+        return None
+    from databricks.sdk import WorkspaceClient
+
+    return next(iter(WorkspaceClient().jobs.list_runs(job_id=int(job_id), active_only=True)), None) is not None
 
 
 def _state_row(spark: SparkSession, cfg: Config):
@@ -56,8 +81,14 @@ def _skip_if_live(spark: SparkSession, cfg: Config, task: str) -> bool:
 
 def _refuse_if_streaming(spark: SparkSession, cfg: Config, task: str) -> None:
     row = _state_row(spark, cfg)
-    if row is not None and streaming_active(row.live_started_ts, row.updated_at, utcnow()):
-        raise RuntimeError(f"{task}: ed_streaming is running (generator state updated {row.updated_at}). "
+    reason = refusal_reason(
+        streaming_job_active(cfg.streaming_job_id),
+        row.live_started_ts if row is not None else None,
+        row.updated_at if row is not None else None,
+        utcnow(), cfg.tick_seconds,
+    )
+    if reason:
+        raise RuntimeError(f"{task}: ed_streaming is running ({reason}). "
                            "Pause it and cancel its run first (docs/runbook-plan2.md).")
 
 

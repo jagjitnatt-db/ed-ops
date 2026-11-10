@@ -22,9 +22,11 @@ from ed_ops.pipeline.silver_visits import validate_events
 from ed_ops.timeutil import utcnow
 
 PHI_PATTERNS = (
-    r"\b\d{3}[-.\s]\d{3}[-.\s]\d{4}\b",  # phone
-    r"MRN-?\d{5,}",  # medical record number
-    r"\b\d{1,2}/\d{1,2}/\d{4}\b",  # full date (DOB); vitals like 120/80 and 9/10 have one slash
+    r"(?:\(\d{3}\)\s?|\b\d{3}[-.\s])\d{3}[-.\s]\d{4}\b",  # phone: 312-555-0101, 312.555.0101, (312) 555-0101
+    r"\b\d{10}\b",  # phone without separators
+    r"(?i)\bMRN[\s:#-]*\d{4,}",  # medical record number: MRN-7000001, MRN: 1234567, mrn 4321, MRN#88001
+    r"\b\d{1,2}/\d{1,2}/\d{2,4}\b",  # m/d/y dates (DOB); vitals like 120/80 and 9/10 have one slash
+    r"\b(?:19|20)\d{2}-\d{2}-\d{2}\b",  # ISO dates
     r"[\w.+-]+@[\w-]+\.[A-Za-z]{2,}",  # email
 )
 REDACTED = "[REDACTED]"

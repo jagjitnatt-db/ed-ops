@@ -126,3 +126,12 @@ def test_retry_candidates_and_successful_retry(spark):
     retried = {r.visit_id: r for r in retry_rows(cands, FakeAi(fail_marker=None)).collect()}
     assert retried["FAC001-err"].ai_status == "ok" and retried["FAC001-err"].suggested_esi == 1
     assert retry_rows(cands, FakeAi()).columns == table_def("silver", "triage_notes").column_names
+
+
+@pytest.mark.parametrize("phi", ["(312) 555-0101", "3125550101", "MRN: 1234567", "mrn 4321", "MRN#88001", "1958-03-14", "3/14/58"])
+def test_regex_backstop_catches_common_real_world_formats(spark, phi):
+    text = f"HR 118, BP 120/80, SpO2 89% RA, T 37.1C, pain 9/10, onset x 40 min; id {phi}."
+    out = spark.createDataFrame([(text,)], "t STRING").select(regex_redact(F.col("t")).alias("o")).collect()[0].o
+    assert phi not in out and "[REDACTED]" in out
+    for vital in ("HR 118", "BP 120/80", "SpO2 89%", "T 37.1C", "pain 9/10", "x 40 min"):
+        assert vital in out

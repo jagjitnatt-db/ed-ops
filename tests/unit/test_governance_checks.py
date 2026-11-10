@@ -51,3 +51,27 @@ def test_ai_mask_miss_rate(spark):
     notes = spark.createDataFrame([("pt Ava Smith arrived",), ("pt [MASKED] arrived",), (None,), ("[MASKED] ok",)], "note_masked STRING")
     assert ai_mask_miss_rate(notes) == 1 / 3
     assert ai_mask_miss_rate(spark.createDataFrame([(None,)], "note_masked STRING")) is None
+
+
+def test_tag_values_follow_the_spec_conventions(spark):
+    from ed_ops.governance.checks import check_tag_values
+
+    table_tags = spark.createDataFrame(
+        [("ed_bronze", "ed_events", "ed_layer", "gold"),  # layer must equal the logical schema
+         ("ed_gold", "facility_current", "ed_layer", "gold"),
+         ("ed_gold", "facility_current", "ed_data_classification", "secret"),  # not an allowed value
+         ("ed_gold", "facility_current", "ed_contains_phi", "false")],
+        "schema_name STRING, table_name STRING, tag_name STRING, tag_value STRING",
+    )
+    column_tags = spark.createDataFrame(
+        [("ed_silver", "ed_visits", "city", "ed_deid_method", "none"),  # not an allowed value
+         ("ed_silver", "ed_visits", "city", "ed_phi_type", "address"),
+         ("ed_silver", "ed_visits", "mrn_hash", "ed_deid_method", "hashed")],
+        "schema_name STRING, table_name STRING, column_name STRING, tag_name STRING, tag_value STRING",
+    )
+    v = check_tag_values(table_tags, column_tags, CFG)
+    assert {(x.object, x.detail.split(" ")[0]) for x in v} == {
+        ("ed_bronze.ed_events", "ed_layer=gold"),
+        ("ed_gold.facility_current", "ed_data_classification=secret"),
+        ("ed_silver.ed_visits.city", "ed_deid_method=none"),
+    }

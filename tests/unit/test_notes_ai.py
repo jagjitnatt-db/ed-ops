@@ -135,3 +135,11 @@ def test_regex_backstop_catches_common_real_world_formats(spark, phi):
     assert phi not in out and "[REDACTED]" in out
     for vital in ("HR 118", "BP 120/80", "SpO2 89%", "T 37.1C", "pain 9/10", "x 40 min"):
         assert vital in out
+
+
+def test_landing_file_paths_are_not_mistaken_for_dates(spark):
+    from ed_ops.pipeline.silver_notes_ai import phi_hit
+
+    path = "/Volumes/c/ed_bronze/landing/events/2026/11/10/02/tick_1762740000.json"
+    row = spark.createDataFrame([(path,)], "p STRING").select(phi_hit(F.col("p")).alias("hit"), regex_redact(F.col("p")).alias("o")).collect()[0]
+    assert row.hit is False and row.o == path
